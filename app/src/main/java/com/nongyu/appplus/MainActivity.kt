@@ -11,6 +11,7 @@ import com.nongyu.appplus.login.model.VerificationResult
 import com.nongyu.appplus.net.NetHolder
 import com.nongyu.appplus.net.NetStartupProbe
 import com.nongyu.appplus.skin.FileSkinSource
+import com.nongyu.appplus.skin.SkinUpdateScheduler
 import com.nongyu.appplus.NongyuApp
 import com.nongyu.appplus.design.NongyuAppPlusTheme
 
@@ -91,5 +92,14 @@ class MainActivity : ComponentActivity() {
         // 票 #90：首帧之后打一次 GET /identity/me 做事后纠正（同样不延长开屏）。
         // 401 会话结束 → 走既有失效分流清凭证并切回登录中心；其余乐观放行、零提示。
         SessionStartupVerifier.schedule(owner = this, context = applicationContext)
+
+        // 票 #53：首帧之后拉「皮肤目录 → 下载 → 校验 → 落盘」。
+        // 同样用 Choreographer.postFrameCallback 等首帧、再切 Dispatchers.IO；
+        // 首帧之前不碰网络（ADR-0006），失败只记日志、不动当前生效的包。
+        SkinUpdateScheduler.schedule(
+            owner = this,
+            context = applicationContext,
+            appVersionCode = BuildConfig.VERSION_CODE,
+        )
     }
 }
