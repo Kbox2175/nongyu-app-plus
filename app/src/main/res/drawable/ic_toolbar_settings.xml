@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置：8 齿轮。
+
+  几何取自 TimetableToolbar.SettingsIcon（24dp 画布 = 24 单位）：
+  - 中心圆半径 0.30 * 24 = 7.2，描边 0.18 * 24 = 4.32（齿轮心加粗过）
+  - 8 齿，起点 -90°，间隔 45°，齿长 0.16 * 24 = 3.84
+  齿与圆心环重叠部分由「同一颜色重叠绘制」自然合并，不需要布尔运算。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 中心圆环 -->
+    <path
+        android:pathData="M12,4.8 A7.2,7.2 0 1,1 11.99,4.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+
+    <!-- 8 根齿：从半径 7.2 到 7.2+3.84=11.04 -->
+    <path
+        android:pathData="M12,4.8 L12,0.96"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M17.09,6.91 L19.8,4.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M19.2,12 L23.04,12"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M17.09,17.09 L19.8,19.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M12,19.2 L12,23.04"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M6.91,17.09 L4.2,19.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M4.8,12 L0.96,12"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M6.91,6.91 L4.2,4.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+</vector>

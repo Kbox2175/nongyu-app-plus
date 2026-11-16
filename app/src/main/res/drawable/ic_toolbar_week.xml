@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  切换日/周 —— **周模式**：三条细横条。
+
+  几何取自 TimetableToolbar.DayWeekIcon 的 dayMode=false 分支（24 画布）：
+  x 从 4.8 到 19.2，y 分别为 6.72 / 12 / 17.28，线宽 0.11 * 24 = 2.64
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M4.8,6.72 L19.2,6.72 M4.8,12 L19.2,12 M4.8,17.28 L19.2,17.28"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.64"
+        android:strokeLineCap="round" />
+</vector>

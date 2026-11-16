@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部导航「个人」：人形（圆头 + 肩部半圆弧）。
+
+  几何取自 NavIconGeometry.Person + drawNavIcon，s = 24：
+  - 头   半径 0.15*24 = 3.6，圆心 (0.5*24, 0.33*24) = (12, 7.92)
+  - 肩   drawArc(startAngle=180, sweepAngle=180, useCenter=false)
+         topLeft = ((s - arcW)/2, s*0.52)
+         arcW = 0.62*24 = 14.88，arcH = 0.46*24 = 11.04
+         → 椭圆包围盒 x 从 (24-14.88)/2 = 4.56 到 19.44，y 从 12.48 到 23.52
+         180°→360° 即上半弧（Compose 的 0° 在右、顺时针；180° 在左，扫 180° 到右，
+         经过**下方**——所以是上凸的半弧）
+
+  线宽 0.085*24 = 2.04
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 头 -->
+    <path
+        android:pathData="M12,4.32 A3.6,3.6 0 1,1 11.99,4.32"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <!-- 肩：椭圆上凸半弧（从左侧中点扫到右侧中点） -->
+    <path
+        android:pathData="M4.56,18 L4.56,18 A7.44,5.52 0 0,1 19.44,18"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04"
+        android:strokeLineCap="round" />
+</vector>

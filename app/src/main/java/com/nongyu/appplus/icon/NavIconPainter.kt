@@ -45,6 +45,22 @@ object NavIconPainter {
     }
 
     /**
+     * 判断某张位图**当前是否可用**（文件存在且能解码）。
+     *
+     * ## 为什么要单独暴露这个
+     *
+     * 调用方需要在**组合阶段**决定「画位图还是画内置矢量图」，而
+     * [drawIconOverride] 只能在 `DrawScope`（绘制阶段）里调 ——
+     * 在 Canvas 的绘制 lambda 里写标志位，组合阶段读不到（绘制是延迟且可能多次的）。
+     *
+     * 这里用同一份缓存：`canLoad` 返回 `true` 时，紧接着的 `drawIconOverride`
+     * 必然命中缓存，不会重复解码文件。
+     *
+     * **绝不抛异常**（ADR-0006 静默回落）。
+     */
+    fun canLoad(absolutePath: String?): Boolean = load(absolutePath) != null
+
+    /**
      * 尝试用位图绘制图标。**必须在 [DrawScope] 里调用。**
      *
      * @param absolutePath 包内位图的**绝对路径**；`null` 直接返回 `false`（无覆盖）。

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  更新课表：向下箭头 + 底部托盘（下载语义）。
+
+  几何取自 TimetableToolbar.UpdateIcon（24 画布）：
+  - 竖杆  (12, 2.88) → (12, 14.88)
+  - 左撇  (6.24, 10.08) → (12, 15.84)
+  - 右撇  (17.76, 10.08) → (12, 15.84)
+  - 托盘  (5.28, 20.64) → (18.72, 20.64)
+  - 线宽  0.11 * 24 = 2.64
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M12,2.88 L12,14.88 M6.24,10.08 L12,15.84 M17.76,10.08 L12,15.84 M5.28,20.64 L18.72,20.64"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.64"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部导航「课表」：日历。
+
+  几何取自 NavIconGeometry.Calendar + drawNavIcon，s = 24：
+  - 外框  left=0.16*24=3.84, top=0.22*24=5.28,
+          w = s - left*2 = 16.32,
+          h = s - top - 0.16*24 = 24 - 5.28 - 3.84 = 14.88
+          圆角 0.14*24 = 3.36
+  - 挂钉  x = 0.34*24 = 8.16 与 0.66*24 = 15.84，y 从 0.10*24=2.4 到 0.30*24=7.2
+  - 分隔  y = 0.44*24 = 10.56，x 从 3.84 到 20.16
+  - 线宽  0.085*24 = 2.04
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 外框 -->
+    <path
+        android:pathData="M7.2,5.28 H16.8 A3.36,3.36 0 0,1 20.16,8.64 V16.8 A3.36,3.36 0 0,1 16.8,20.16 H7.2 A3.36,3.36 0 0,1 3.84,16.8 V8.64 A3.36,3.36 0 0,1 7.2,5.28 Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <!-- 两个挂钉 -->
+    <path
+        android:pathData="M8.16,2.4 L8.16,7.2 M15.84,2.4 L15.84,7.2"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04"
+        android:strokeLineCap="round" />
+    <!-- 横向分隔线 -->
+    <path
+        android:pathData="M3.84,10.56 L20.16,10.56"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04"
+        android:strokeLineCap="round" />
+</vector>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部导航「全部」：四宫格。
+
+  几何取自 NavIconGeometry.Grid + drawNavIcon：
+  s = 24, gap = 0.12*24 = 2.88
+  cell = (s - gap*3) / 2 = (24 - 8.64) / 2 = 7.68
+  圆角 cell*0.28 = 2.1504
+  线宽 0.085*24 = 2.04（BuiltInSkin.BUILT_IN_ICON_STROKE）
+
+  四格位置（topLeft）：
+    (2.88, 2.88)  (13.44, 2.88)
+    (2.88, 13.44) (13.44, 13.44)
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M5.03,2.88 H10.55 A2.15,2.15 0 0,1 12.7,5.03 V10.55 A2.15,2.15 0 0,1 10.55,12.7 H5.03 A2.15,2.15 0 0,1 2.88,10.55 V5.03 A2.15,2.15 0 0,1 5.03,2.88 Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <path
+        android:pathData="M15.59,2.88 H21.11 A2.15,2.15 0 0,1 23.26,5.03 V10.55 A2.15,2.15 0 0,1 21.11,12.7 H15.59 A2.15,2.15 0 0,1 13.44,10.55 V5.03 A2.15,2.15 0 0,1 15.59,2.88 Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <path
+        android:pathData="M5.03,13.44 H10.55 A2.15,2.15 0 0,1 12.7,15.59 V21.11 A2.15,2.15 0 0,1 10.55,23.26 H5.03 A2.15,2.15 0 0,1 2.88,21.11 V15.59 A2.15,2.15 0 0,1 5.03,13.44 Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <path
+        android:pathData="M15.59,13.44 H21.11 A2.15,2.15 0 0,1 23.26,15.59 V21.11 A2.15,2.15 0 0,1 21.11,23.26 H15.59 A2.15,2.15 0 0,1 13.44,21.11 V15.59 A2.15,2.15 0 0,1 15.59,13.44 Z"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+</vector>

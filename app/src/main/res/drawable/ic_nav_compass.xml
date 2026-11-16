@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部导航「探索」：指南针（外圆 + 指针菱形）。
+
+  几何取自 NavIconGeometry.Compass + drawNavIcon，s = 24：
+  c = (12, 12)
+  r = 0.34*24 = 8.16
+  d = 0.20*24 = 4.8
+  halfW = d*0.72 = 3.456
+  midY = c.y + d*0.10 = 12 + 0.48 = 12.48
+
+  指针折线（与 drawNavIcon 的四个 drawLine 完全对应）：
+    (12, 7.2) → (15.456, 16.8) → (12, 12.48) → (8.544, 16.8) → (12, 7.2)
+  线宽 0.085*24 = 2.04
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- 外圆 -->
+    <path
+        android:pathData="M12,3.84 A8.16,8.16 0 1,1 11.99,3.84"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04" />
+    <!-- 指针 -->
+    <path
+        android:pathData="M12,7.2 L15.456,16.8 L12,12.48 L8.544,16.8 L12,7.2"
+        android:strokeColor="#000000"
+        android:strokeWidth="2.04"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

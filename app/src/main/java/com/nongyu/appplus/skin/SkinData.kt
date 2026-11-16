@@ -145,13 +145,34 @@ data class NavIconKey(val name: String) {
     override fun toString() = name
 
     companion object {
+        // ---- 底部导航壳（内置默认皮肤从第一天就覆盖的四个）----
         val Grid = NavIconKey("grid")
         val Calendar = NavIconKey("calendar")
         val Compass = NavIconKey("compass")
         val Person = NavIconKey("person")
 
-        /** 内置默认皮肤必须覆盖的图标全集（导航壳的四个 Tab）。 */
-        val BuiltIn: List<NavIconKey> = listOf(Grid, Calendar, Compass, Person)
+        // ---- 课表工具条（2026-11-16 纳入皮肤契约）----
+        // 图标形状来自 res/drawable/ic_toolbar_*.xml，皮肤包可用 iconImages 覆盖。
+        val Settings = NavIconKey("settings")
+        val Update = NavIconKey("update")
+        /** 日/周切换的**日模式**图标（一条粗横条）。 */
+        val Day = NavIconKey("day")
+        /** 日/周切换的**周模式**图标（三条细横条）。 */
+        val Week = NavIconKey("week")
+        val Add = NavIconKey("add")
+
+        /**
+         * 内置默认几何/资源覆盖的**图标全集**。
+         *
+         * 渲染层按这张表逐项回落：皮肤包 `iconImages` 有值用位图，
+         * 否则用 res 里对应的 VectorDrawable。
+         *
+         * 注意：密码眼睛（睁/闭）**不在**此列 —— 维护者明确要求它不进皮肤层。
+         */
+        val BuiltIn: List<NavIconKey> = listOf(
+            Grid, Calendar, Compass, Person,
+            Settings, Update, Day, Week, Add,
+        )
     }
 }
 

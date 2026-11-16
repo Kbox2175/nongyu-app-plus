@@ -12,6 +12,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import com.nongyu.appplus.icon.BuiltInIcons
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -33,9 +37,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
-import com.nongyu.appplus.icon.NavIconGeometry
 import com.nongyu.appplus.icon.NavIconPainter
-import com.nongyu.appplus.icon.drawNavIcon
 import com.nongyu.appplus.skin.NavIconKey
 
 /** 四个 Tab 的文案（与 `MainShell` 的路由索引一一对应）。 */
@@ -118,37 +120,65 @@ private fun NavItem(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.offset(y = (iconSize.value * 0.07f).dp),
         ) {
-            Box(modifier = Modifier.size(iconSize)) {
-                Canvas(modifier = Modifier.size(iconSize)) {
-                    // ADR-0009：包内位图优先；没有或解码失败则回落几何绘制。
-                    val drawn = with(NavIconPainter) {
-                        drawIconOverride(absolutePath = iconImage, tint = tint)
+            Box(
+                modifier = Modifier.size(iconSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                // 回落链：皮肤包位图 → res 里的矢量图 → 不画。
+                //
+                // 2026-11-16：内置几何绘制已资源化（迁到 res/drawable/ic_nav_*.xml）。
+                // 代价是 iconStrokes 的线宽调节对导航图标不再生效 —— 维护者已明确「不保」。
+                //
+                // 注意：这里**先判断位图能不能用**，再决定画哪一层。
+                // 不能在 Canvas 里画完再回头判断——Canvas 的绘制 lambda 是延迟执行的，
+                // 组合阶段读不到它写的标志位（本项目踩过）。
+                val bitmapUsable = remember(iconImage) { NavIconPainter.canLoad(iconImage) }
+                val imageRes = BuiltInIcons.vectorOf(icon)
+
+                when {
+                    bitmapUsable -> Canvas(modifier = Modifier.size(iconSize)) {
+                        with(NavIconPainter) {
+                            drawIconOverride(absolutePath = iconImage, tint = tint)
+                        }
                     }
-                    if (!drawn) {
-                        drawNavIcon(
-                            geometry = NavIconGeometry.builtInOf(icon),
-                            tint = tint,
-                            strokeScale = iconStroke,
-                        )
-                    }
+
+                    imageRes != null -> Icon(
+                        painter = painterResource(imageRes),
+                        contentDescription = null,
+                        tint = tint,
+                        modifier = Modifier.size(iconSize),
+                    )
+
+                    // 两者都没有：不画（静默，ADR-0006 Q3=B）
+                    else -> Unit
                 }
-                // 票 #60 需求 4.1：从底部往上变绿。绿色层按 fillProgress 裁切。
+
+                // 票 #60 需求 4.1：从底部往上变绿。绿色层按 fillProgress 裁切，
+                // 与上面的图标层**叠在同一个 Box 里**（Box 会按顺序层叠）。
                 if (fillProgress > 0f && selected) {
-                    Canvas(
-                        modifier = Modifier
-                            .size(iconSize)
-                            .clip(BottomUpReveal(fillProgress)),
-                    ) {
-                        val drawn = with(NavIconPainter) {
-                            drawIconOverride(absolutePath = iconImage, tint = indicatorColor)
+                    val greenUsable = bitmapUsable
+                    val greenRes = imageRes
+                    when {
+                        greenUsable -> Canvas(
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(BottomUpReveal(fillProgress)),
+                        ) {
+                            with(NavIconPainter) {
+                                drawIconOverride(absolutePath = iconImage, tint = indicatorColor)
+                            }
                         }
-                        if (!drawn) {
-                            drawNavIcon(
-                                geometry = NavIconGeometry.builtInOf(icon),
-                                tint = indicatorColor,
-                                strokeScale = iconStroke,
-                            )
-                        }
+
+                        greenRes != null -> Icon(
+                            painter = painterResource(greenRes),
+                            contentDescription = null,
+                            tint = indicatorColor,
+                            modifier = Modifier
+                                .size(iconSize)
+                                .clip(BottomUpReveal(fillProgress)),
+                        )
+
+                        else -> Unit
                     }
                 }
             }

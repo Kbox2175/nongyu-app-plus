@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import com.nongyu.appplus.R
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -23,6 +26,9 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.PI
 import androidx.compose.ui.unit.dp
 import com.nongyu.appplus.design.NongyuTheme
 
@@ -107,85 +113,53 @@ private fun ToolbarButton(
     }
 }
 
-/** 齿轮：外圈 + 4 方向齿 + 中心孔。 */
+/** 齿轮（设置）：资源化后的 VectorDrawable（原 8 齿自绘，2026-11-16 迁到 res）。 */
 @Composable
 private fun SettingsIcon(size: Dp, tint: Color, uiScale: Float) {
-    Canvas(modifier = Modifier.size(size)) {
-        val c = Offset(this.size.width / 2f, this.size.height / 2f)
-        val r = this.size.minDimension * 0.30f
-        val toothLen = this.size.minDimension * 0.16f
-        val stroke = Stroke(width = this.size.minDimension * 0.11f, cap = StrokeCap.Round)
-        drawCircle(tint, radius = r, center = c, style = stroke)
-        // 四方向齿（上下左右各一小段）
-        val dirs = listOf(
-            Offset(0f, -1f), Offset(0f, 1f), Offset(-1f, 0f), Offset(1f, 0f),
-        )
-        dirs.forEach { d ->
-            drawLine(
-                color = tint,
-                start = c + d * r,
-                end = c + d * (r + toothLen),
-                strokeWidth = stroke.width,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
+    Icon(
+        painter = painterResource(R.drawable.ic_toolbar_settings),
+        contentDescription = "设置",
+        tint = tint,
+        modifier = Modifier.size(size),
+    )
 }
 
-/** 更新课表：向下的箭头 + 底部托盘（下载语义）。 */
+/** 更新课表：资源化后的 VectorDrawable（原下箭头 + 托盘自绘）。 */
 @Composable
 private fun UpdateIcon(size: Dp, tint: Color, uiScale: Float) {
-    Canvas(modifier = Modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val sw = w * 0.11f
-        drawLine(tint, Offset(w * 0.5f, h * 0.12f), Offset(w * 0.5f, h * 0.62f), sw, StrokeCap.Round)
-        // 箭头两撇
-        drawLine(tint, Offset(w * 0.26f, h * 0.42f), Offset(w * 0.5f, h * 0.66f), sw, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.74f, h * 0.42f), Offset(w * 0.5f, h * 0.66f), sw, StrokeCap.Round)
-        // 底部托盘
-        drawLine(tint, Offset(w * 0.22f, h * 0.86f), Offset(w * 0.78f, h * 0.86f), sw, StrokeCap.Round)
-    }
+    Icon(
+        painter = painterResource(R.drawable.ic_toolbar_update),
+        contentDescription = "更新课表",
+        tint = tint,
+        modifier = Modifier.size(size),
+    )
 }
 
-/** 切换日/周：日模式画 1 条粗条，周模式画 3 条细条（一眼看出当前是哪个）。 */
+/**
+ * 切换日/周：日模式与周模式是两个不同资源（皮肤可分别覆盖）。
+ *
+ * 原来是一个 Canvas 里按 `dayMode` 走两支；拆成两张矢量图后，
+ * 皮肤包可以对「日」和「周」用不同的图。
+ */
 @Composable
 private fun DayWeekIcon(size: Dp, tint: Color, uiScale: Float, dayMode: Boolean) {
-    Canvas(modifier = Modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        if (dayMode) {
-            // 一条粗横条 = 单日
-            drawLine(
-                color = tint,
-                start = Offset(w * 0.2f, h * 0.5f),
-                end = Offset(w * 0.8f, h * 0.5f),
-                strokeWidth = w * 0.20f,
-                cap = StrokeCap.Round,
-            )
-        } else {
-            val sw = w * 0.11f
-            listOf(0.28f, 0.5f, 0.72f).forEach { y ->
-                drawLine(
-                    color = tint,
-                    start = Offset(w * 0.2f, h * y),
-                    end = Offset(w * 0.8f, h * y),
-                    strokeWidth = sw,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-    }
+    Icon(
+        painter = painterResource(
+            if (dayMode) R.drawable.ic_toolbar_day else R.drawable.ic_toolbar_week,
+        ),
+        contentDescription = if (dayMode) "切换到周视图" else "切换到日视图",
+        tint = tint,
+        modifier = Modifier.size(size),
+    )
 }
 
-/** 添加日程：加号。 */
+/** 添加日程：资源化后的 VectorDrawable（原加号自绘）。 */
 @Composable
 private fun AddIcon(size: Dp, tint: Color, uiScale: Float) {
-    Canvas(modifier = Modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
-        val sw = w * 0.13f
-        drawLine(tint, Offset(w * 0.5f, h * 0.18f), Offset(w * 0.5f, h * 0.82f), sw, StrokeCap.Round)
-        drawLine(tint, Offset(w * 0.18f, h * 0.5f), Offset(w * 0.82f, h * 0.5f), sw, StrokeCap.Round)
-    }
+    Icon(
+        painter = painterResource(R.drawable.ic_toolbar_add),
+        contentDescription = "添加日程",
+        tint = tint,
+        modifier = Modifier.size(size),
+    )
 }

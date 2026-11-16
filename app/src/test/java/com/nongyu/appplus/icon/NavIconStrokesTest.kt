@@ -85,7 +85,14 @@ class NavIconStrokesTest {
                 0.0001f,
             )
         }
-        assertEquals("仍是四项齐全（每项一定有值）", 4, resolved.size)
+        // 断言跟着契约走，不写死数字：图标全集在 2026-11-16 从 4 个导航图标
+        // 扩到 9 个（加入课表工具条的 settings/update/day/week/add）。
+        // 写死 4 会让「扩全集」这类正当改动变成测试红灯。
+        assertEquals(
+            "仍是全集齐全（每项一定有值）",
+            NavIconKey.BuiltIn.size,
+            resolved.size,
+        )
     }
 
     @Test
