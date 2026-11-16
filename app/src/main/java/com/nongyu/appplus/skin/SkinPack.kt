@@ -55,6 +55,14 @@ data class SkinPackManifest(
     val fontFileName: String?,
     val entries: List<SkinPackEntry>,
     val signature: String,
+    /**
+     * 图标名 → 包内位图相对路径（ADR-0009）。空表 = 全部用内置几何绘制。
+     *
+     * 带默认值，既有构造点无需改动。解析期的合法性判定在 [SkinManifestParser.parseMap]：
+     * 路径必须安全、扩展名在白名单内、且**必须已在 [entries] 里声明**（否则整包拒绝，
+     * 防止夹带未校验文件）。
+     */
+    val iconImages: Map<NavIconKey, String> = emptyMap(),
     val warnings: List<String> = emptyList(),
 ) {
 
@@ -296,12 +304,15 @@ data class LoadedResources(
     val iconStrokes: Map<NavIconKey, Float>,
     val fontFileName: String?,
     val meta: PayloadMeta,
+    /** 图标名 → 包内位图相对路径（ADR-0009）。空表 = 全部走内置几何绘制。 */
+    val iconImages: Map<NavIconKey, String> = emptyMap(),
     val warnings: List<String> = emptyList(),
 ) {
     /** 组装成皮肤数据源要的资源段。字体取不到时是 [SkinFont.SystemDefault]，两条路径一致。 */
     fun toPayload(): ResourcePayload = ResourcePayload(
         iconStrokes = iconStrokes,
         font = fontFileName?.let { SkinFont.FromPack(it) } ?: SkinFont.SystemDefault,
+        iconImages = iconImages,
         meta = meta,
     )
 
@@ -310,6 +321,7 @@ data class LoadedResources(
         fun fallback(meta: PayloadMeta) = LoadedResources(
             iconStrokes = emptyMap(),
             fontFileName = null,
+            iconImages = emptyMap(),
             meta = meta,
         )
     }
@@ -385,6 +397,9 @@ object SkinPackPlanner {
             iconStrokes = accepted,
             fontFileName = useFont,
             meta = PayloadMeta.loaded(version = manifest.schemaVersion.toString()),
+            // 图标位图（ADR-0009）：合法性已在 parseMap 挡过，这里原样带出；
+            // 渲染层逐图标取用，缺失/解码失败回落内置几何。
+            iconImages = manifest.iconImages,
             warnings = warnings,
         )
     }

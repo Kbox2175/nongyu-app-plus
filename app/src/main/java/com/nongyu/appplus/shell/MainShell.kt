@@ -1,5 +1,6 @@
 package com.nongyu.appplus.shell
 
+import com.nongyu.appplus.timetable.data.CourseRepository
 import com.nongyu.appplus.design.uiScaleFor
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
@@ -61,6 +62,7 @@ import com.nongyu.appplus.skin.LocalSkinSource
 import com.nongyu.appplus.icon.NavIconStrokes
 import com.nongyu.appplus.design.NongyuAppPlusTheme
 import com.nongyu.appplus.design.NongyuTheme
+import com.nongyu.appplus.design.showTextToast
 import com.nongyu.appplus.timetable.model.CourseEntry
 import com.nongyu.appplus.timetable.logic.isPeriodEnded
 import com.nongyu.appplus.timetable.logic.NOTE_DEBOUNCE_MS
@@ -265,6 +267,9 @@ fun MainShell() {
     var addingSchedule by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
     // 占位按钮的轻提示（不接任何真实逻辑）
     var placeholderHint by remember { mutableStateOf<String?>(null) }
+    // 更新课表：进行中标记（防连点）+ 重载触发键（成功后让课表页重读缓存）
+    var updatingTimetable by remember { mutableStateOf(false) }
+    var timetableReloadKey by remember { mutableIntStateOf(0) }
     // 票 #60 需求 4.1：切到课表 Tab 时，课表图标从底部往上变绿（800ms）。
     // 切走直接归零，不做离场动画（需求 5）。
     val iconFill = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -330,6 +335,9 @@ fun MainShell() {
             builtIn = skin.builtIn.resources,
         )
     }
+    // ADR-0009：图标位图覆盖（已是绝对路径，由 FileSkinSource 在启动路径拼好）。
+    // 缺项 = 该项走几何绘制，逐图标回落。
+    val iconImages = remember(resolution) { resolution.resourcePayload().iconImages }
 
     // 详见 docs/specs/界面层.md §8.3 C 雷达波方向语义
     var pulseKey by remember { mutableIntStateOf(0) }
@@ -484,6 +492,7 @@ fun MainShell() {
 
                 TimetableScreen(
                     navOccupiedPx = navOccupiedHeight,
+                        reloadSignal = timetableReloadKey,
                     deletedIds = deletedIds,
                     schedules = addedSchedules,
                     onCourseClick = { course ->
@@ -493,7 +502,35 @@ fun MainShell() {
                         applyIntent(resolveBlankSlotClick(openCard, day, period, week))
                     },
                     onSettings = { placeholderHint = "设置：本期占位，未实现" },
-                    onUpdateSchedule = { placeholderHint = "更新课表：本期占位，未实现" },
+                    onUpdateSchedule = {
+                        // 更新课表：照后端下发的配方重新拉取（走 Repository）。
+                        // 结果用**纯文字** Toast 提示（维护者要求：底部提示、不带应用图标）。
+                        if (!updatingTimetable) {
+                            updatingTimetable = true
+                            coroutineScope.launch {
+                                val repo = CourseRepository(context)
+                                repo.refreshFromJiaowu()
+                                    .onSuccess { count ->
+                                        showTextToast(
+                                            context,
+                                            "课表已更新：$count 个时段",
+                                            uiScale = uiScale,
+                                        )
+                                        // 让课表页重新读缓存
+                                        timetableReloadKey++
+                                    }
+                                    .onFailure { e ->
+                                        val msg = when (e) {
+                                            is CourseRepository.TooFrequentException ->
+                                                e.message ?: "更新过于频繁，请稍后再试"
+                                            else -> e.message ?: "更新课表失败"
+                                        }
+                                        showTextToast(context, msg, uiScale = uiScale, long = true)
+                                    }
+                                updatingTimetable = false
+                            }
+                        }
+                    },
                     onAddScheduleFromToolbar = { week, day ->
                         // 工具条入口：预填今天、第 1 节
                         addingSchedule = Triple(day, 1, week)
@@ -792,6 +829,7 @@ fun MainShell() {
                         iconSize = iconSize,
                         labelSize = labelSize,
                         iconStrokes = iconStrokes,
+                        iconImages = iconImages,
                         s = ::s,
                     )
                 }

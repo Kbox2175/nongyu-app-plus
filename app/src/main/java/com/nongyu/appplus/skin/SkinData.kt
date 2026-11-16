@@ -103,16 +103,31 @@ data class ColorPayload(
 data class ResourcePayload(
     val iconStrokes: Map<NavIconKey, Float>,
     val font: SkinFont,
+    /**
+     * 图标名 → 包内**位图相对路径**（ADR-0009：图标可由皮肤包覆盖）。
+     *
+     * 带默认值 `emptyMap()`，既有构造点无需改动；未声明或该项非法时渲染层回落内置几何绘制。
+     * 只有通过 `SkinPackIntegrity` 校验（白名单扩展名 + 在 integrity.entries 里声明）的
+     * 项才会进这张表 —— 逐资源回落，ADR-0005 Q5=A。
+     */
+    val iconImages: Map<NavIconKey, String> = emptyMap(),
     val meta: PayloadMeta,
 ) {
     /** 取某个图标的线宽系数，缺失则回落 [fallback]（逐资源回落，ADR-0005 Q5=A）。 */
     fun strokeOf(icon: NavIconKey, fallback: Float): Float = iconStrokes[icon] ?: fallback
+
+    /**
+     * 取某个图标的包内位图路径；`null` = 该项没有可用的位图覆盖，
+     * 渲染层据此回落内置几何绘制（**不是一个错误**）。
+     */
+    fun iconImageOf(icon: NavIconKey): String? = iconImages[icon]
 
     companion object {
         /** 空资源段（全部回落）：用于「资源通道不可用」的半降级状态。 */
         fun empty(meta: PayloadMeta) = ResourcePayload(
             iconStrokes = emptyMap(),
             font = SkinFont.SystemDefault,
+            iconImages = emptyMap(),
             meta = meta,
         )
     }

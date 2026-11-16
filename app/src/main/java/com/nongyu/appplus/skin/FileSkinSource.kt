@@ -146,12 +146,23 @@ class FileSkinSource(
         } else {
             payload
         }
+        // ADR-0009：图标位图同样在启动路径把相对路径拼成绝对路径，
+        // 渲染层直接交给 BitmapFactory，不必自己知道包目录。
+        val payloadWithPaths = if (payload.iconImages.isEmpty()) {
+            payloadWithFontPath
+        } else {
+            payloadWithFontPath.copy(
+                iconImages = payload.iconImages.mapValues { (_, rel) ->
+                    File(packDir, rel).absolutePath
+                },
+            )
+        }
         Log.i(TAG, "资源段：${payload.meta.describe("resources")}")
         loaded.warnings.forEach { Log.i(TAG, "资源段警告：$it") }
 
         // 未采用时把真实原因一并带回，而不是丢弃后让上层误报成「无资源段」。
         return if (payload.meta.origin.isLoaded) {
-            payloadWithFontPath to payload.meta
+            payloadWithPaths to payload.meta
         } else {
             null to payload.meta
         }

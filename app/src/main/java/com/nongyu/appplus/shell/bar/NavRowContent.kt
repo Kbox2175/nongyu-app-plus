@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.nongyu.appplus.icon.NavIconGeometry
+import com.nongyu.appplus.icon.NavIconPainter
 import com.nongyu.appplus.icon.drawNavIcon
 import com.nongyu.appplus.skin.NavIconKey
 
@@ -60,6 +61,8 @@ fun NavRowContent(
     iconSize: Dp,
     labelSize: TextUnit,
     iconStrokes: Map<NavIconKey, Float>,
+    /** 图标名 → 包内位图**绝对路径**（ADR-0009）；缺项 = 该项走几何绘制。 */
+    iconImages: Map<NavIconKey, String> = emptyMap(),
     s: (Dp) -> Dp,
 ) {
     Row(
@@ -70,11 +73,11 @@ fun NavRowContent(
             .alpha(navAlpha),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        NavItem(TAB_LABELS[0], NavIconKey.Grid, selectedTab == 0, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Grid), Modifier.weight(1f)) { onTabSelected(0) }
-        NavItem(TAB_LABELS[1], NavIconKey.Calendar, selectedTab == 1, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Calendar), Modifier.weight(1f), fillProgress = if (selectedTab == 1) iconFillProgress else 0f) { onTabSelected(1) }
+        NavItem(TAB_LABELS[0], NavIconKey.Grid, selectedTab == 0, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Grid), Modifier.weight(1f), iconImage = iconImages[NavIconKey.Grid]) { onTabSelected(0) }
+        NavItem(TAB_LABELS[1], NavIconKey.Calendar, selectedTab == 1, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Calendar), Modifier.weight(1f), fillProgress = if (selectedTab == 1) iconFillProgress else 0f, iconImage = iconImages[NavIconKey.Calendar]) { onTabSelected(1) }
         Spacer(modifier = Modifier.width(s(96.dp)))
-        NavItem(TAB_LABELS[2], NavIconKey.Compass, selectedTab == 2, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Compass), Modifier.weight(1f)) { onTabSelected(2) }
-        NavItem(TAB_LABELS[3], NavIconKey.Person, selectedTab == 3, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Person), Modifier.weight(1f)) { onTabSelected(3) }
+        NavItem(TAB_LABELS[2], NavIconKey.Compass, selectedTab == 2, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Compass), Modifier.weight(1f), iconImage = iconImages[NavIconKey.Compass]) { onTabSelected(2) }
+        NavItem(TAB_LABELS[3], NavIconKey.Person, selectedTab == 3, itemColor, indicatorColor, iconSize, labelSize, iconStrokes.getValue(NavIconKey.Person), Modifier.weight(1f), iconImage = iconImages[NavIconKey.Person]) { onTabSelected(3) }
     }
 }
 
@@ -96,6 +99,8 @@ private fun NavItem(
     modifier: Modifier = Modifier,
     /** 入场动画：图标从底部往上变绿的进度 0..1（票 #60）。默认 0f，只有课表 Tab 会传。 */
     fillProgress: Float = 0f,
+    /** 包内位图绝对路径（ADR-0009）；`null` = 走几何绘制。 */
+    iconImage: String? = null,
     onClick: () -> Unit,
 ) {
     val tint = if (selected) indicatorColor else itemColor
@@ -115,11 +120,17 @@ private fun NavItem(
         ) {
             Box(modifier = Modifier.size(iconSize)) {
                 Canvas(modifier = Modifier.size(iconSize)) {
-                    drawNavIcon(
-                        geometry = NavIconGeometry.builtInOf(icon),
-                        tint = tint,
-                        strokeScale = iconStroke,
-                    )
+                    // ADR-0009：包内位图优先；没有或解码失败则回落几何绘制。
+                    val drawn = with(NavIconPainter) {
+                        drawIconOverride(absolutePath = iconImage, tint = tint)
+                    }
+                    if (!drawn) {
+                        drawNavIcon(
+                            geometry = NavIconGeometry.builtInOf(icon),
+                            tint = tint,
+                            strokeScale = iconStroke,
+                        )
+                    }
                 }
                 // 票 #60 需求 4.1：从底部往上变绿。绿色层按 fillProgress 裁切。
                 if (fillProgress > 0f && selected) {
@@ -128,11 +139,16 @@ private fun NavItem(
                             .size(iconSize)
                             .clip(BottomUpReveal(fillProgress)),
                     ) {
-                        drawNavIcon(
-                            geometry = NavIconGeometry.builtInOf(icon),
-                            tint = indicatorColor,
-                            strokeScale = iconStroke,
-                        )
+                        val drawn = with(NavIconPainter) {
+                            drawIconOverride(absolutePath = iconImage, tint = indicatorColor)
+                        }
+                        if (!drawn) {
+                            drawNavIcon(
+                                geometry = NavIconGeometry.builtInOf(icon),
+                                tint = indicatorColor,
+                                strokeScale = iconStroke,
+                            )
+                        }
                     }
                 }
             }

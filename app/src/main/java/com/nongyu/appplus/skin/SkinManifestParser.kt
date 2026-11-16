@@ -98,6 +98,20 @@ object SkinManifestParser {
             }
             .toMap()
 
+        // 图标位图（ADR-0009）：三项硬校验任一不过就**整包拒绝**（安全优先于可用性）——
+        // ① 路径必须合法（无穿越、扩展名在白名单内）；
+        // ② 必须已在 integrity.entries 里声明（防止夹带未校验文件）；
+        // ③ 图标名必须是已知 NavIconKey（未知名属「同主版本未知字段」→ 忽略，不阻断）。
+        val declaredPaths = entries.map { it.path }.toSet()
+        val images = LinkedHashMap<NavIconKey, String>()
+        for ((name, path) in raw.iconImages.orEmpty()) {
+            val cleanPath = path.trim()
+            if (SkinPackIntegrity.checkPathAllowed(cleanPath) != null) return null
+            if (cleanPath !in declaredPaths) return null
+            val key = NavIconKey.BuiltIn.firstOrNull { it.name == name } ?: continue
+            images[key] = cleanPath
+        }
+
         // 旧扁平格式命中 → 记一条迁移 warning（票 #57 ①，随 LoadedResources.warnings 进日志）。
         val warnings = if (raw.format == ManifestFormat.FLAT) {
             listOf(LEGACY_FLAT_WARNING)
@@ -114,6 +128,7 @@ object SkinManifestParser {
             fontFileName = font,
             entries = entries,
             signature = signature,
+            iconImages = images,
             warnings = warnings,
         )
     }
@@ -177,6 +192,15 @@ object SkinManifestParser {
                         }
                     }
                 },
+                // 图标位图段（ADR-0009）：只做取值，合法性判定全在 parseMap。
+                iconImages = payload?.optJSONObject("iconImages")?.let { o ->
+                    buildMap {
+                        for (key in o.keys()) {
+                            val v = o.optString(key, "").trim()
+                            if (v.isNotEmpty()) put(key, v)
+                        }
+                    }
+                },
                 format = format,
             ),
         )
@@ -228,5 +252,7 @@ data class ManifestRaw(
     val fontFileName: String?,
     val iconStrokes: Map<String, Float>?,
     val entries: List<SkinPackEntry>?,
+    /** 图标名 → 包内位图相对路径（ADR-0009）。`null` = 未声明该段。 */
+    val iconImages: Map<String, String>? = null,
     val format: ManifestFormat = ManifestFormat.FLAT,
 )
