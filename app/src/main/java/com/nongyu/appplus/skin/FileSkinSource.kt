@@ -136,14 +136,25 @@ class FileSkinSource(
         }
 
         val payload = loaded.toPayload()
-        // 记录完整元信息：无论最终是否采用，都要能说清「这一环到底怎么了」。
-        // ADR-0006 要求日志写明是无包 / 校验失败 / schema 过高 / minAppVersion 过高，
-        // 所以这里打的是已经带上原因的 meta，而不是笼统写「无资源段」。
+        // 票 #54：把包目录拼进 FromPack，渲染层才能构造 FontFamily。
+        // 只改绝对路径字段，fileName / meta / iconStrokes 全部原样保留。
+        val font = payload.font
+        val payloadWithFontPath = if (font is SkinFont.FromPack && font.absolutePath == null) {
+            payload.copy(
+                font = font.copy(absolutePath = File(packDir, font.fileName).absolutePath),
+            )
+        } else {
+            payload
+        }
         Log.i(TAG, "资源段：${payload.meta.describe("resources")}")
         loaded.warnings.forEach { Log.i(TAG, "资源段警告：$it") }
 
         // 未采用时把真实原因一并带回，而不是丢弃后让上层误报成「无资源段」。
-        return if (payload.meta.origin.isLoaded) payload to payload.meta else null to payload.meta
+        return if (payload.meta.origin.isLoaded) {
+            payloadWithFontPath to payload.meta
+        } else {
+            null to payload.meta
+        }
     }
 
     /**

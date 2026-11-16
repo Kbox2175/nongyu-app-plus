@@ -150,8 +150,16 @@ sealed interface SkinFont {
     /** 使用系统默认字体（内置默认皮肤，也是任何字体加载失败时的最终回落）。 */
     data object SystemDefault : SkinFont
 
-    /** 皮肤包内的字体文件（T4 实现加载；本票只定义标识）。 */
-    data class FromPack(val fileName: String) : SkinFont
+    /**
+     * 皮肤包内的字体文件（票 #54）。
+     *
+     * @property fileName 包内相对路径（清单里声明的名字，参与校验）。
+     * @property absolutePath 渲染层真正用来构造字体的绝对路径。
+     *   `FileSkinSource` 在启动路径把它拼好塞进来；为 `null` 表示拿不到包目录，
+     *   [SkinFontResolver] 会据此安全回落到系统默认，绝不抛异常（ADR-0006）。
+     *   带默认值是为了不破坏既有用 `FromPack(fileName)` 构造的调用点。
+     */
+    data class FromPack(val fileName: String, val absolutePath: String? = null) : SkinFont
 }
 
 /**

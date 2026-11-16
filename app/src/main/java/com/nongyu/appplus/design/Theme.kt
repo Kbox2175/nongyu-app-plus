@@ -1,10 +1,12 @@
 package com.nongyu.appplus.design
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.text.font.FontFamily
 import com.nongyu.appplus.skin.SkinResolution
 import com.nongyu.appplus.skin.SkinSource
 
@@ -31,10 +33,20 @@ import com.nongyu.appplus.skin.SkinSource
  */
 val LocalNongyuColors = staticCompositionLocalOf { NongyuColors.Green }
 
-/** 组件侧统一从这里取色，组件代码不直接写十六进制。 */
+/**
+ * 当前生效的字体族（票 #54）。与 [LocalNongyuColors] 同构：
+ * 皮肤 ⊃ 图标/字体（GLOSSARY.md），字体也是主题的一部分。
+ * 默认 [FontFamily.Default] = 系统默认字体，所以不提供时视觉与接字体之前完全一致。
+ */
+val LocalNongyuFontFamily = staticCompositionLocalOf<FontFamily> { FontFamily.Default }
+
+/** 组件侧统一从这里取色与字体，组件代码不直接写十六进制、不直接构造字体。 */
 object NongyuTheme {
     val colors: NongyuColors
         @Composable get() = LocalNongyuColors.current
+
+    val fontFamily: FontFamily
+        @Composable get() = LocalNongyuFontFamily.current
 }
 
 /**
@@ -55,6 +67,35 @@ private fun NongyuColors.toColorScheme() = lightColorScheme(
 )
 
 /**
+ * 给 M3 [Typography] 的 15 个槽位统一换字体，保留各自原有的字号 / 字重 / 行高。
+ *
+ * 为什么不直接 `Typography(TextStyle(fontFamily = ff), ...)`：那样会把默认的
+ * 字号 / 字重全丢掉，界面会突变。改成从默认实例 copy 每个槽位，只动 fontFamily。
+ * [FontFamily.Default] 是 M3 默认实例里已有的值，所以无包时结果与默认实例等价。
+ */
+private fun withFontFamily(ff: FontFamily): Typography {
+    val base = Typography()
+    fun androidx.compose.ui.text.TextStyle.with() = copy(fontFamily = ff)
+    return base.copy(
+        displayLarge = base.displayLarge.with(),
+        displayMedium = base.displayMedium.with(),
+        displaySmall = base.displaySmall.with(),
+        headlineLarge = base.headlineLarge.with(),
+        headlineMedium = base.headlineMedium.with(),
+        headlineSmall = base.headlineSmall.with(),
+        titleLarge = base.titleLarge.with(),
+        titleMedium = base.titleMedium.with(),
+        titleSmall = base.titleSmall.with(),
+        bodyLarge = base.bodyLarge.with(),
+        bodyMedium = base.bodyMedium.with(),
+        bodySmall = base.bodySmall.with(),
+        labelLarge = base.labelLarge.with(),
+        labelMedium = base.labelMedium.with(),
+        labelSmall = base.labelSmall.with(),
+    )
+}
+
+/**
  * 应用主题。
  *
  * 本期固定浅色：移除 `darkTheme` 参数并关闭动态取色，
@@ -69,26 +110,46 @@ private fun NongyuColors.toColorScheme() = lightColorScheme(
  * @param source 皮肤数据源；缺省为 [SkinSource.BuiltIn]。
  * @param resolution **启动路径上已解析好的**皮肤结果。传入后不再重复解析
  *   （ADR-0006：解析只发生一次）；不传则回落到内置默认。
+ * @param fontFamily 显式指定的字体族（票 #54）。缺省时**从 [resolution] 的资源段自动派生**：
+ *   包内字体 → `SkinFontFamilyFactory.create(...)`，无包或损坏 → [FontFamily.Default]，
+ *   因此不传参时视觉与接字体之前完全一致。
  */
 @Composable
 fun NongyuAppPlusTheme(
     colors: NongyuColors? = null,
     source: SkinSource = SkinSource.BuiltIn,
     resolution: SkinResolution? = null,
+    fontFamily: FontFamily? = null,
     content: @Composable () -> Unit,
 ) {
     // 已解析结果优先；没传就造一个「全回落」的结果，语义等价于内置默认。
     val effective = resolution ?: SkinResolution(null, null, source.builtIn)
     val resolved = colors ?: effective.palette()
     val colorScheme = remember(resolved) { resolved.toColorScheme() }
+
+    // 字体：从已解析资源段派生，失败在 factory 内部静默回落（ADR-0006）。
+    // 只在 [effective] 变化时重算，避免每帧重复读字体文件。
+    val resolvedFontFamily = fontFamily ?: remember(effective) {
+        SkinFontFamilyFactory.create(effective.resourcePayload().font)
+    }
+    // M3 的 Typography 构造不收 defaultFontFamily（那是 M2 的 API），只收 15 个
+    // TextStyle 槽位。从默认实例出发，把每个槽位 copy 一份 fontFamily，
+    // 其余字号 / 字重 / 行高全部保留 —— 无包时 FontFamily.Default 与默认实例等价，
+    // 因此视觉与接字体之前完全一致。
+    val typography = remember(resolvedFontFamily) {
+        withFontFamily(resolvedFontFamily)
+    }
+
     androidx.compose.runtime.CompositionLocalProvider(
         LocalNongyuColors provides resolved,
+        LocalNongyuFontFamily provides resolvedFontFamily,
         com.nongyu.appplus.skin.LocalSkinSource provides source,
         // 下发同一个对象，UI 层只读不解析（避免冷启动重复磁盘读）。
         com.nongyu.appplus.skin.LocalSkinResolution provides effective,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
+            typography = typography,
             content = content,
         )
     }
