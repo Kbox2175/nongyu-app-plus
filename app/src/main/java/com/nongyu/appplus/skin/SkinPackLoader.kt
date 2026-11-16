@@ -290,12 +290,30 @@ object SkinPackLoader {
         val attached = ResourcesLoaderBinding.attach(resources, packDir) ?: return null
         return try {
             assemble(
-                source = ResourcesLoaderPackByteSource(resources),
+                // ⚠️ 票 #98 设备验收发现的真缺陷：这里**不能**用
+                // `ResourcesLoaderPackByteSource(resources)`。
+                //
+                // `attach` 调的是 `ResourcesProvider.loadFromDirectory(packDir, null)`——第二个参数
+                // 是 AssetsProvider，**传的是 null**，因此包目录并没有被接到 `resources.assets` 上。
+                // 而 `resources.assets.open(path)` 读的是 APK 自己的 assets，必然抛
+                // FileNotFoundException → verify 判 IntegrityFailed →
+                // 「清单声明的文件缺失」→ 皮肤包在 API 30+ 设备上整体失效
+                // （图标位图、字体全部回落内置默认）。
+                //
+                // 皮肤包文件就躺在 packDir 这个普通目录里，**直接读文件**才是正确且唯一的
+                // 取字节方式；这也让 API 30+ 与 26–29 两条路径的产物天然一致
+                // （ADR-0005 要求的「两路径产物等价」因此是结构上成立的，而不是靠两边对齐）。
+                //
+                // ResourcesLoader 的挂载保留：将来若有真正「编译资源」形态的包体
+                // （res/ 目录结构）再启用它，届时需要为 loadFromDirectory 提供真实
+                // AssetsProvider，并补上对应的契约测试。
+                source = FilePackByteSource(packDir),
                 manifest = manifest,
                 appVersionCode = appVersionCode,
                 builtIn = builtIn,
                 verifier = verifier,
-                fontReadable = { path -> PackFontProbe.fromResources(resources, path) },
+                // 字体可读性同样按文件探——与取字节路径保持一致。
+                fontReadable = { path -> PackFontProbe.fromFile(File(packDir, path)) },
             ).also { Log.i(TAG, "皮肤包加载完成: ${it.meta.describe("resources")}") }
         } finally {
             ResourcesLoaderBinding.detach(resources, attached)

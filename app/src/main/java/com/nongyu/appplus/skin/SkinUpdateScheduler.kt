@@ -2,7 +2,6 @@ package com.nongyu.appplus.skin
 
 import android.content.Context
 import android.util.Log
-import android.view.Choreographer
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -11,52 +10,53 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 皮肤包下载器的**首帧后触发点**（票 #53 交付 2）。
+ * 皮肤包下载器的**触发点**。
  *
- * ## 为什么是 postFrameCallback（ADR-0006 硬约束）
- * `Choreographer.postFrameCallback` 在下一帧绘制时回调，天然晚于 `setContent` 的
- * 首次布局 + 绘制 ⇒ **首帧已经上屏**，此后发网络不可能阻塞冷启动。
- * 与 `NetStartupProbe` / `SessionStartupVerifier` 同一形状（本仓既有范式）。
+ * ## 现在是手动触发（维护者 2026-11-16 决定）
  *
- * ## 为什么还要切 Dispatchers.IO
- * `postFrameCallback` 跑在**主线程**；`SkinStore` 要读指针与写盘、OkHttp 要发请求，
- * 都是阻塞 IO。必须切到 IO 线程，否则首帧后仍会卡 UI。切线程后再把
- * `NetHolder` / Keystore 之类惰性装配的代价从主线程移走（net 包守卫 2）。
+ * 原设计中它在每次冷启动的**首帧之后**自动拉一次目录（票 #53 交付 2）。
+ * 维护者要求「改为手动、不自动」，因此：
  *
- * ## 幂等
- * 同一个进程内只触发一次（`volatile` 标记），避免 Activity 重建时重复下载。
+ * - **自动触发已移除**：`MainActivity` 不再调用本类，App 冷启动不会发任何皮肤网络请求；
+ * - **手动入口保留**：[requestManualUpdate] 供将来的「设置页 / 检查更新按钮」调用，
+ *   [runOnce] 供测试与调试直接执行一次。
+ *
+ * ## 无论自动还是手动，两条硬约束不变（ADR-0006）
+ *
+ * 1. **绝不阻塞首帧**：只允许在首帧之后调用。手动入口由 UI 事件触发，天然满足；
+ *    若将来恢复自动触发，必须重新引入 `Choreographer.postFrameCallback`。
+ * 2. **失败静默**：任何失败只记日志，不动当前生效的包。
+ *
+ * ## 为什么还切 Dispatchers.IO
+ * `SkinStore` 要读指针与写盘、OkHttp 要发请求，都是阻塞 IO。
+ * [requestManualUpdate] 从主线程发起时会切到 IO 线程执行，避免卡 UI。
  */
 object SkinUpdateScheduler {
 
     private const val TAG = "NongyuSkinDownload"
 
-    @Volatile
-    private var requested = false
-
     /**
-     * 安排一次「首帧后」的皮肤更新。
+     * 手动请求一次皮肤更新（用户显式操作触发）。**不会自动调用**。
      *
-     * 必须在 `setContent` **之后**调用（与 `NetStartupProbe.schedule` 同位置），
-     * 且**不得**在 Composable / 启动路径的同步段里调用。
+     * 由主线程（如按钮点击）调用即可；内部切到 `Dispatchers.IO` 执行，
+     * 完成后回主线程只打一条日志。**永不抛异常**。
+     *
+     * @return 可直接丢弃的 Job 语义由调用方持有；失败不影响当前皮肤。
      */
-    fun schedule(owner: LifecycleOwner, context: Context, appVersionCode: Int) {
-        if (requested) return
-        requested = true
-
-        Choreographer.getInstance().postFrameCallback {
-            // 已到首帧之后：切到 IO 线程做网络与磁盘，绝不占主线程。
-            owner.lifecycleScope.launch {
-                val outcome = withContext(Dispatchers.IO) {
-                    runOnce(context.applicationContext, appVersionCode)
-                }
-                Log.i(TAG, "皮肤更新结束：$outcome")
+    fun requestManualUpdate(owner: LifecycleOwner, context: Context, appVersionCode: Int) {
+        val app = context.applicationContext
+        owner.lifecycleScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                runOnce(app, appVersionCode)
             }
+            Log.i(TAG, "手动皮肤更新结束：$outcome")
         }
     }
 
     /**
-     * 真正执行一次（单独成函数便于测试直接调，绕开 Choreographer）。
+     * 真正执行一次（同步阻塞，**必须在非主线程调用**）。
      *
+     * 单独成函数便于测试直接调，也便于将来在 WorkManager / 后台任务里复用。
      * **永不抛异常**：任何失败都只记日志并返回失败结论。
      */
     fun runOnce(context: Context, appVersionCode: Int): SkinPackDownloader.Outcome {
@@ -73,10 +73,5 @@ object SkinUpdateScheduler {
             Log.w(TAG, "皮肤更新流程异常，已忽略：${t.message}")
             SkinPackDownloader.Outcome.Failed("调度异常：${t.message}")
         }
-    }
-
-    /** 仅供测试：复位幂等标记。 */
-    internal fun resetForTest() {
-        requested = false
     }
 }

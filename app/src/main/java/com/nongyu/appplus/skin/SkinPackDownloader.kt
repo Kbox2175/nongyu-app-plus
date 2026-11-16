@@ -168,6 +168,10 @@ class SkinPackDownloader(
                 zis.closeEntry()
             }
         }
+        // 诊断：把解压出来的文件树打进日志，便于定位「装好了但内容缺失」。
+        val tree = root.walkTopDown().filter { it.isFile }
+            .joinToString { "${it.relativeTo(root).path}(${it.length()})" }
+        log("解压完成，共 ${root.walkTopDown().count { it.isFile }} 个文件：$tree")
         return true
     }
 
