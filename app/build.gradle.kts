@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     // 票 #48 实测：AGP 9 内置 Kotlin 下按目录 alias 声明即可，不需要 buildscript classpath。
@@ -83,6 +83,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+    // 系统冷启动画面主题化（票 #55 / Q2=A 最小改动）
+    implementation(libs.androidx.core.splashscreen)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

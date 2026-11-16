@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.nongyu.appplus.login.session.LoginSessionHolder
 import com.nongyu.appplus.login.session.SessionStartupVerifier
 import com.nongyu.appplus.login.model.VerificationResult
@@ -34,6 +35,9 @@ import com.nongyu.appplus.design.NongyuAppPlusTheme
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 系统启动画面主题化（票 #55）。官方硬要求：必须在 super.onCreate() 之前调用。
+        // 不设 setKeepOnScreenCondition —— 皮肤解析本就在首帧前同步完成（ADR-0006）。
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 

@@ -2,4 +2,10 @@
 <resources>
     <!-- 自适应图标背景色：骨架阶段使用中性色，设计稿确定后替换为农屿品牌色 -->
     <color name="ic_launcher_background">#2E7D5B</color>
+
+    <!-- core-splashscreen 启动画面背景色（票 #55 / Q2=A 最小改动）。
+         与 NongyuColors.Green 的 colorBackground = Color(0xFFF7FAF8) 保持一致。
+         单独声明为 @color 资源，因为 windowSplashScreenBackground 只接受资源引用，
+         不能内联十六进制；改色时请同时改 design/NongyuColors.kt 里的 Green。 -->
+    <color name="splash_background">#F7FAF8</color>
 </resources>

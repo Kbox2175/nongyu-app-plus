@@ -10,6 +10,10 @@ coreKtx = "1.17.0"
 activityCompose = "1.11.0"
 lifecycle = "2.10.0"
 
+# core-splashscreen（票 #55）：AAR 实测 minCompileSdk=35 / minAGP=8.6.0，
+# 均 ≤ 本工程 compileSdk 36 / AGP 9.2.1；backport 到 API 23，覆盖 minSdk 26。
+coreSplashscreen = "1.2.0"
+
 junit = "4.13.2"
 androidxTestRunner = "1.6.2"
 androidxTestExtJunit = "1.2.1"
@@ -33,6 +37,7 @@ datastore = "1.1.7"
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "coreSplashscreen" }
 
 # Compose 依赖统一由 BOM 约束版本，下方条目不再单独指定版本
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }

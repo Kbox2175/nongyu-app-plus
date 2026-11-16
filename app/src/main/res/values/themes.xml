@@ -2,4 +2,15 @@
 <resources>
     <!-- 应用根主题：Compose 由代码决定外观，此处仅声明无 ActionBar 的宿主主题 -->
     <style name="Theme.NongyuAppPlus" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- core-splashscreen 启动主题（票 #55 / Q2=A 最小改动）。
+         Android 12+ 系统强制显示 SplashScreen Window；这里把它主题化为品牌背景色，
+         并通过 backport 让 API 26-30 得到一致体验。
+         postSplashScreenTheme 指回宿主主题，installSplashScreen() 之后恢复它。
+         刻意不设 windowSplashScreenAnimatedIcon / windowSplashScreenAnimationDuration；
+         也不用 setKeepOnScreenCondition（皮肤解析本就在首帧前同步完成，ADR-0006）。 -->
+    <style name="Theme.NongyuAppPlus.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.NongyuAppPlus</item>
+    </style>
 </resources>
