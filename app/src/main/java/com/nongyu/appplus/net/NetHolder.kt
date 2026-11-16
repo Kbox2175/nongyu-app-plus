@@ -2,6 +2,7 @@ package com.nongyu.appplus.net
 
 import android.content.Context
 import com.nongyu.appplus.net.api.CacheApi
+import com.nongyu.appplus.net.api.SchoolApi
 import com.nongyu.appplus.net.api.IdentityApi
 import com.nongyu.appplus.net.auth.DefaultSessionInvalidListener
 import com.nongyu.appplus.net.auth.MinimalSessionStore

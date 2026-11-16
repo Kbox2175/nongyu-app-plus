@@ -37,6 +37,13 @@ data class CacheGetResponse(
     val code: String? = null,
     val message: String? = null,
     val address: String? = null,
+    // ---- 2026-11-16 起：未命中时下发的「直连取数配方」----
+    // 客户端**不自己填**地址 / 方法 / Cookie / 解析器名，全部照后端给的值执行。
+    val target: String? = null,
+    val method: String? = null,
+    val cookies: List<IssuedCookie>? = null,
+    val parser: String? = null,
+    val session: String? = null,
 ) {
     /** 判别这次 200 到底是命中还是未命中/错误。**只读 [code]，不猜其它字段。 */
     fun discriminate(): CacheResult = when {
@@ -44,6 +51,11 @@ data class CacheGetResponse(
             code = code,
             message = message,
             address = address,
+            target = target,
+            method = method,
+            cookies = cookies.orEmpty(),
+            parser = parser,
+            session = session,
         )
 
         else -> CacheResult.Hit(
@@ -58,6 +70,18 @@ data class CacheGetResponse(
     }
 }
 
+/**
+ * 后端下发的教务会话 Cookie（`ASPSESSIONID*`）。
+ *
+ * ⚠️ 这是**本人**的教务会话，只对 `jiaowu.sicau.edu.cn` 有效，
+ * 贴到 WebVPN 编码地址上不会登录。不要持久化、不要打印。
+ */
+@Serializable
+data class IssuedCookie(
+    val name: String? = null,
+    val value: String? = null,
+)
+
 /** 判别结果。让调用方用一个 `when` 就能覆盖两种形状，不必自己判空。 */
 sealed class CacheResult {
     /** 缓存命中。 */
@@ -68,14 +92,37 @@ sealed class CacheResult {
      *
      * @param code 如 `cache_miss`；其它值按 [com.nongyu.appplus.net.core.ApiErrorCode] 归类。
      */
+    /**
+     * 未命中或子域错误（后端把这些都放在 200 里）。
+     *
+     * @param code 如 `cache_miss`；其它值按 [com.nongyu.appplus.net.core.ApiErrorCode] 归类。
+     * @param address 直连教务 URL（**不是** WebVPN 编码地址）。校外打不进。
+     *   教室/教师这类需要用户输入的 dataType 不下发地址，这里为空。
+     * @param method 请求方式，由后端给（当前固定 `GET`）。客户端不自己决定。
+     * @param cookies 教务会话 Cookie（`ASPSESSIONID*`），由后端用已保管的 tgt 换出。
+     * @param parser 解析器名（如 `jiaowu-course-v1`），标识该用哪套字段规则解析 HTML。
+     * @param session `ok` / `unavailable`。`unavailable` 表示后端拿不到教务会话，cookies 为空。
+     */
     data class Miss(
         val code: String,
         val message: String?,
         val address: String?,
+        val target: String? = null,
+        val method: String? = null,
+        val cookies: List<IssuedCookie> = emptyList(),
+        val parser: String? = null,
+        val session: String? = null,
     ) : CacheResult() {
 
         /** 是否「没有可用缓存」这一正常流程分支。 */
         fun isCacheMiss(): Boolean = code == com.nongyu.appplus.net.core.ApiErrorCode.CACHE_MISS
+
+        /** 后端是否给出了可执行的取数配方（地址 + 方法都有）。 */
+        fun hasRecipe(): Boolean =
+            !address.isNullOrBlank() && !method.isNullOrBlank()
+
+        /** 教务会话是否可用（后端换票成功）。 */
+        fun sessionAvailable(): Boolean = session == "ok" && cookies.isNotEmpty()
     }
 }
 

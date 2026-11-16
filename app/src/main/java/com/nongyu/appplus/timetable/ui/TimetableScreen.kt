@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,7 +58,6 @@ import com.nongyu.appplus.timetable.model.TOTAL_WEEKS
 import com.nongyu.appplus.timetable.logic.TimetableGeometry
 import com.nongyu.appplus.timetable.data.MOCK_TERM_START
 import com.nongyu.appplus.timetable.data.weekOfTerm
-import com.nongyu.appplus.timetable.data.MOCK_COURSES
 import com.nongyu.appplus.timetable.ui.holiday.TimetableTitleBlock
 import com.nongyu.appplus.timetable.model.CourseEntry
 import com.nongyu.appplus.timetable.model.ScheduleEntry
@@ -110,6 +110,13 @@ fun TimetableScreen(
     onPeriodColumnBounds: (topPx: Float, heightPx: Float) -> Unit = { _, _ -> },
     /** 点左上角周次表头：打开日历快速跳周/跳天。 */
     onWeekHeaderClick: () -> Unit = {},
+    /**
+     * 外部要求重读课表的触发键。变化时本页重新读缓存。
+     *
+     * 用于「更新课表」成功后让界面刷新 —— 数据已经在后端缓存里更新了，
+     * 页面只需重新读一次，不用自己再解析一遍。
+     */
+    reloadSignal: Int = 0,
 ) {
     val colors = NongyuTheme.colors
     val density = LocalDensity.current
@@ -204,8 +211,44 @@ fun TimetableScreen(
         fun seg(start: Float, end: Float): Float =
             ((ep - start) / (end - start)).coerceIn(0f, 1f)
 
-        val weekCourses = remember(currentWeek, deletedIds) {
-            MOCK_COURSES
+        // ---- 真实课表数据（票：真实数据填充）----
+        //
+        // 数据来源：后端 `course` 回传缓存（GET /school/cache/course）。
+        // **不再使用 MOCK_COURSES** —— 维护者要求填真实数据，
+        // 静默回退假数据会让人以为已接通，所以失败时保留空列表并记下原因。
+        val appContext = LocalContext.current
+        var allCourses by remember { mutableStateOf<List<CourseEntry>>(emptyList()) }
+        var loadError by remember { mutableStateOf<String?>(null) }
+        var loaded by remember { mutableStateOf(false) }
+        var reloadKey by remember { mutableIntStateOf(0) }
+        // 外部信号变化时也重读（更新课表成功后由 Shell 触发）
+        LaunchedEffect(reloadSignal) {
+            if (reloadSignal > 0) reloadKey++
+        }
+        LaunchedEffect(reloadKey) {
+            val repo = com.nongyu.appplus.timetable.data.CourseRepository(appContext)
+
+            // 这里**只读缓存**，不再做任何「读失败就灌样本」的兜底。
+            //
+            // 开发期曾有一段 DEBUG 兜底：读失败时把 assets 里的样本课表 POST 回后端。
+            // 「更新课表」走后端下发的取数配方跑通后，那段已移除 —— 它会带来真实风险：
+            // 登录态未就绪等**瞬时失败**也会触发上传，用一份固定的样本课表
+            // 覆盖掉后端里的真实缓存。现在读失败就如实报错，让用户去点「更新课表」。
+
+            repo.load()
+                .onSuccess { outcome ->
+                    allCourses = outcome.entries
+                    loadError = null
+                }
+                .onFailure { e ->
+                    allCourses = emptyList()
+                    loadError = e.message ?: "课表加载失败"
+                }
+            loaded = true
+        }
+
+        val weekCourses = remember(currentWeek, deletedIds, allCourses) {
+            allCourses
                 .filter { it.id !in deletedIds }
                 .coursesInWeek(currentWeek)
                 .mergeAdjacent()
@@ -239,6 +282,30 @@ fun TimetableScreen(
                 },
                 onDismiss = { showJumpDialog = false },
             )
+        }
+
+        // ---- 真实数据为空时的提示 ----
+        //
+        // 换掉 mock 之后，未登录 / 缓存未命中 / 解析后无可落格课程 都会让课表整片空白。
+        // 不给提示的话用户看到的就是「课表坏了」。只在**加载完成且确实没有课程**时显示，
+        // 加载中不闪提示（避免开局闪一下）。
+        if (loaded && weekCourses.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = (40f * uiScale).dp)
+                    .graphicsLayer { alpha = seg(0.70f, 0.90f) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = loadError ?: "本周没有课程",
+                    color = NongyuTheme.colors.surface.colorTextSecondary.copy(alpha = 0.85f),
+                    fontSize = (10f * uiScale).sp,
+                    lineHeight = (14f * uiScale).sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
 
         // 票 #60：整屏宽流水，从当前时间水位一直铺到**屏幕底部**。
