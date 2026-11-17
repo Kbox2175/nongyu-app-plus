@@ -114,7 +114,15 @@ fun NongyuApp() {
                         }
                     },
             ) {
-                LoginCenterScreen()
+                LoginCenterScreen(
+                    // 前 30% 进度内把登录按钮淡完：圆洞虽然会吃掉它，但按钮自带
+                    // graphicsLayer 缩放，可能挡住 DstOut 穿透，加这层兜底保证它一定消失。
+                    arrowAlphaOverride = if (playing) {
+                        (1f - p / 0.3f).coerceIn(0f, 1f)
+                    } else {
+                        null
+                    },
+                )
             }
         }
     }

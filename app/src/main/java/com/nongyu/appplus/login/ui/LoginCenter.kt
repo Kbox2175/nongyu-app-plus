@@ -98,7 +98,16 @@ import com.nongyu.appplus.design.NongyuTheme
  * - 左右圆：`brand.colorBrandMuted` 底 + `surface.colorTextSecondary` 图标（淡绿底灰）
  */
 @Composable
-fun LoginCenterScreen() {
+fun LoginCenterScreen(
+    /**
+     * 票 #94 转场：登录按钮的透明度覆盖值（null = 不覆盖）。
+     *
+     * 为什么按钮要单独淡出：转场靠在上层挖圆洞露出主界面，
+     * 而按钮自身带 `graphicsLayer` 缩放，可能挡住 `DstOut` 的穿透；
+     * 加这一层淡出兜底，保证「点完按钮就消失」，不会留在洞里。
+     */
+    arrowAlphaOverride: Float? = null,
+) {
     val colors = NongyuTheme.colors
     val appContext = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
@@ -616,6 +625,7 @@ fun LoginCenterScreen() {
         // ---- 底部大圆形箭头按钮 = 登录 ----
         LoginArrowButton(
             colors = colors,
+            alphaOverride = arrowAlphaOverride,
             onClick = {
                 if (submitting) return@LoginArrowButton
                 // 前置校验：与后端 validate.go 同一套规则，不合格不发请求
@@ -1099,6 +1109,8 @@ private fun LoginArrowButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: androidx.compose.ui.unit.Dp = 88.dp,
+    /** 票 #94：转场期间由根节点下发的透明度；null = 不覆盖。 */
+    alphaOverride: Float? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -1110,7 +1122,12 @@ private fun LoginArrowButton(
     Box(
         modifier = modifier
             .size(size)
-            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+            .graphicsLayer {
+                scaleX = pressScale
+                scaleY = pressScale
+                // 转场期间按根节点下发值淡出；非转场保持 1
+                this.alpha = alphaOverride ?: 1f
+            }
             .clip(androidx.compose.foundation.shape.CircleShape)
             .clickable(interactionSource = interaction) { onClick() },
         contentAlignment = Alignment.Center,
