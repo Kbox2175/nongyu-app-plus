@@ -25,6 +25,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.unit.Dp
 import kotlin.math.sin
 import kotlin.math.cos
@@ -51,6 +54,10 @@ fun TimetableToolbar(
     onToggleDayWeek: () -> Unit,
     onAddSchedule: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 设置齿轮当前旋转角度（度）。点开设置时由外部驱动旋转。 */
+    gearRotation: Float = 0f,
+    /** 上报齿轮中心在**屏幕**上的像素坐标，供设置面板做「克隆跟随」动画用。 */
+    onGearCenterChange: (Offset?) -> Unit = {},
 ) {
     val colors = NongyuTheme.colors
     fun s(dp: Dp): Dp = (dp.value * uiScale).dp
@@ -66,8 +73,18 @@ fun TimetableToolbar(
         horizontalArrangement = Arrangement.spacedBy(gap, Alignment.End),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ToolbarButton(buttonSize, corner, colors.surface.colorCard, uiScale, onSettings) {
-            SettingsIcon(iconSize, colors.brand.colorBrand, uiScale)
+        ToolbarButton(
+            buttonSize,
+            corner,
+            colors.surface.colorCard,
+            uiScale,
+            onSettings,
+            // 只用这一个按钮上报位置：设置面板的克隆动画就是跟随它
+            onPositioned = { centerInWindow -> onGearCenterChange(centerInWindow) },
+        ) {
+            Box(modifier = Modifier.rotate(gearRotation)) {
+                SettingsIcon(iconSize, colors.brand.colorBrand, uiScale)
+            }
         }
         ToolbarButton(buttonSize, corner, colors.surface.colorCard, uiScale, onUpdateSchedule) {
             UpdateIcon(iconSize, colors.brand.colorBrand, uiScale)
@@ -99,6 +116,8 @@ private fun ToolbarButton(
     bg: Color,
     uiScale: Float,
     onClick: () -> Unit,
+    /** 可选：上报本按钮中心在**屏幕（window）**上的像素坐标。 */
+    onPositioned: ((Offset) -> Unit)? = null,
     icon: @Composable () -> Unit,
 ) {
     Box(
@@ -106,6 +125,17 @@ private fun ToolbarButton(
             .size(size)
             .clip(RoundedCornerShape(corner))
             .background(bg)
+            .then(
+                if (onPositioned == null) {
+                    Modifier
+                } else {
+                    Modifier.onGloballyPositioned { coords ->
+                        // boundsInWindow 给的是相对窗口的像素矩形，取中心
+                        val r = coords.boundsInWindow()
+                        onPositioned(Offset(r.left + r.width / 2f, r.top + r.height / 2f))
+                    }
+                },
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

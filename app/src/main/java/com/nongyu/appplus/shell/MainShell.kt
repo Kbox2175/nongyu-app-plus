@@ -35,6 +35,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.geometry.Offset
+import com.nongyu.appplus.settings.logic.SettingsBuilders
+import com.nongyu.appplus.settings.logic.TimetableSettings
+import com.nongyu.appplus.settings.ui.SettingsPanel
+import com.nongyu.appplus.settings.ui.SETTINGS_GEAR_DEGREES
+import com.nongyu.appplus.settings.ui.settingsTween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -270,6 +276,25 @@ fun MainShell() {
     // 更新课表：进行中标记（防连点）+ 重载触发键（成功后让课表页重读缓存）
     var updatingTimetable by remember { mutableStateOf(false) }
     var timetableReloadKey by remember { mutableIntStateOf(0) }
+    // ---- 设置面板（全局设置包，当前只有「课程表」分区）----
+    var settingsOpen by remember { mutableStateOf(false) }
+    var gearCenterPx by remember { mutableStateOf<Offset?>(null) }
+    // 面板滑入进度 + 齿轮旋转：用一个 Animatable 驱动，保证两者严格同步
+    val settingsProgress = remember { Animatable(0f) }
+    // 课程表设置项的值（本期只做界面，先放内存，持久化留给后续票）
+    var settingsDayMode by remember { mutableStateOf(false) }
+    var settingsShowWeekends by remember { mutableStateOf(true) }
+    var settingsQuietRefresh by remember { mutableStateOf(false) }
+
+
+    // 打开/关闭统一走同一个动画：progress 0→1 滑入，1→0 滑出（反向动画由对称 tween 保证）
+    LaunchedEffect(settingsOpen) {
+        if (settingsOpen) {
+            settingsProgress.animateTo(1f, settingsTween())
+        } else {
+            settingsProgress.animateTo(0f, settingsTween())
+        }
+    }
     // 票 #60 需求 4.1：切到课表 Tab 时，课表图标从底部往上变绿（800ms）。
     // 切走直接归零，不做离场动画（需求 5）。
     val iconFill = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -404,6 +429,33 @@ fun MainShell() {
     ) {
         // 详见 docs/specs/界面层.md §8.6 A uiScale 基准 411dp、上限 1.25
         val uiScale = uiScaleFor(maxWidth.value)
+
+        // 「更新课表」的唯一实现：工具条按钮与设置面板里的同名条目都调它，
+        // 避免两处各写一遍导致行为漂移（一个是 60s 限流，一个漏了就是 bug）。
+        fun updateTimetableOnce() {
+            if (!updatingTimetable) {
+                updatingTimetable = true
+                coroutineScope.launch {
+                    val repo = CourseRepository(context)
+                    repo.refreshFromJiaowu()
+                        .onSuccess { count ->
+                            if (!settingsQuietRefresh) {
+                                showTextToast(context, "课表已更新：$count 个时段", uiScale = uiScale)
+                            }
+                            timetableReloadKey++
+                        }
+                        .onFailure { e ->
+                            val msg = when (e) {
+                                is CourseRepository.TooFrequentException ->
+                                    e.message ?: "更新过于频繁，请稍后再试"
+                                else -> e.message ?: "更新课表失败"
+                            }
+                            showTextToast(context, msg, uiScale = uiScale, long = true)
+                        }
+                    updatingTimetable = false
+                }
+            }
+        }
         fun s(dp: Dp): Dp = (dp.value * uiScale).dp
 
         val navHeight = s(62.dp)
@@ -501,36 +553,10 @@ fun MainShell() {
                     onBlankSlotAdd = { day, period, week ->
                         applyIntent(resolveBlankSlotClick(openCard, day, period, week))
                     },
-                    onSettings = { placeholderHint = "设置：本期占位，未实现" },
-                    onUpdateSchedule = {
-                        // 更新课表：照后端下发的配方重新拉取（走 Repository）。
-                        // 结果用**纯文字** Toast 提示（维护者要求：底部提示、不带应用图标）。
-                        if (!updatingTimetable) {
-                            updatingTimetable = true
-                            coroutineScope.launch {
-                                val repo = CourseRepository(context)
-                                repo.refreshFromJiaowu()
-                                    .onSuccess { count ->
-                                        showTextToast(
-                                            context,
-                                            "课表已更新：$count 个时段",
-                                            uiScale = uiScale,
-                                        )
-                                        // 让课表页重新读缓存
-                                        timetableReloadKey++
-                                    }
-                                    .onFailure { e ->
-                                        val msg = when (e) {
-                                            is CourseRepository.TooFrequentException ->
-                                                e.message ?: "更新过于频繁，请稍后再试"
-                                            else -> e.message ?: "更新课表失败"
-                                        }
-                                        showTextToast(context, msg, uiScale = uiScale, long = true)
-                                    }
-                                updatingTimetable = false
-                            }
-                        }
-                    },
+                    onSettings = { settingsOpen = true },
+                    gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
+                    onGearCenterChange = { gearCenterPx = it },
+                    onUpdateSchedule = { updateTimetableOnce() },
                     onAddScheduleFromToolbar = { week, day ->
                         // 工具条入口：预填今天、第 1 节
                         addingSchedule = Triple(day, 1, week)
@@ -878,6 +904,45 @@ fun MainShell() {
         // 位置必须在**星云球之后**：维护者要求遮板也要遮住星云球。
         // 时间条仍然声明在它之后 → 时间条与时间文字浮在遮罩之上，不被压暗。
         ModalScrim(visible = rulerDragging)
+
+        // ---- 全局设置面板（**层级最高**：盖住星云球、时间条与一切页面元素）----
+        //
+        // 位置必须在 OrbHost / ModalScrim **之后**：Compose 同层 Box 里后声明者在上，
+        // 维护者 2026-11-17 要求「设置高于星云球」，所以这块是全文件最后一个浮层。
+        //
+        // 打开：齿轮旋转 + 面板贴右边缘滑入，左侧留 10% 空白；
+        // 面板滑到包含齿轮后，齿轮克隆体随面板飞到标题行；
+        // 点遮板或右上角 X 都走反向动画退回。
+        if (settingsOpen || settingsProgress.value > 0f) {
+            SettingsPanel(
+                content = SettingsBuilders.buildContent(
+                    dayMode = settingsDayMode,
+                    showWeekends = settingsShowWeekends,
+                    quietRefresh = settingsQuietRefresh,
+                ),
+                uiScale = uiScale,
+                gearSize = s(16.dp),
+                gearCenterPx = gearCenterPx,
+                gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
+                progress = settingsProgress.value,
+                onDismiss = { settingsOpen = false },
+                onEntryClick = { key ->
+                    when (key) {
+                        TimetableSettings.Keys.UpdateSchedule -> {
+                            // 复用工具条「更新课表」的同一套逻辑：先关面板再刷新
+                            settingsOpen = false
+                            updateTimetableOnce()
+                        }
+                        else -> Unit
+                    }
+                },
+                onChoiceSelected = { key, index ->
+                    if (key == TimetableSettings.Keys.DayWeekView) {
+                        settingsDayMode = index == 1
+                    }
+                },
+            )
+        }
 
         // ---- 时间条（页面级 overlay）----
         if (selectedTab == 1) {

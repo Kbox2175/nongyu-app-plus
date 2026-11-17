@@ -1,6 +1,7 @@
 package com.nongyu.appplus.timetable.ui
 
 import com.nongyu.appplus.design.uiScaleFor
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -117,6 +118,10 @@ fun TimetableScreen(
      * 页面只需重新读一次，不用自己再解析一遍。
      */
     reloadSignal: Int = 0,
+    /** 设置齿轮旋转角度（度），由 Shell 驱动；点开设置时旋转。 */
+    gearRotation: Float = 0f,
+    /** 上报设置齿轮中心在**屏幕**上的像素坐标，供设置面板做克隆跟随动画。 */
+    onGearCenterChange: (Offset?) -> Unit = {},
 ) {
     val colors = NongyuTheme.colors
     val density = LocalDensity.current
@@ -433,6 +438,8 @@ fun TimetableScreen(
                 dayMode = dayMode,
                 onSettings = onSettings,
                 onUpdateSchedule = onUpdateSchedule,
+                gearRotation = gearRotation,
+                onGearCenterChange = onGearCenterChange,
                 onToggleDayWeek = { dayMode = !dayMode },
                 onAddSchedule = {
                     // 不带格子位置：由 Shell 弹「添加日程」表单（默认当前周的今天第 1 节）
