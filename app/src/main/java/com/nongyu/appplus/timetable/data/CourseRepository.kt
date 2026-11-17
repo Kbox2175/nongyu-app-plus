@@ -31,8 +31,8 @@ import kotlinx.serialization.json.jsonArray
  *
  * 后端**没有课表专用端点**。课程数据走通用回传缓存：
  * ```
- * 客户端直连教务 → POST /school/cache/course 回传 → 后端用 schema 校验后存起来
- * 本仓库 App      → GET  /school/cache/course 读取
+ * 客户端直连教务 → POST /school/jiaowu/cache/course 回传 → 后端用 schema 校验后存起来
+ * 本仓库 App      → GET  /school/jiaowu/cache/course 读取
  * ```
  * 依据：`nongyu-backend-plus/internal/school/jiaowu/datatype.go` 的
  * `DataTypeCourse = "course"`；`schema/course.json` 定义 payload 形状。
@@ -71,7 +71,7 @@ class CourseRepository(
      *
      * ## address 从哪来
      *
-     * 后端 `GET /school/cache/:dataType` 未命中时返回的是
+     * 后端 `GET /school/jiaowu/cache/:dataType` 未命中时返回的是
      * `200 {"code":"cache_miss","message":"...","address":"https://webvpn..."}`
      * —— **地址就在这个响应里**，不需要另外请求 `/school/address`。
      *
@@ -116,7 +116,7 @@ class CourseRepository(
         load().map { it.entries }
 
     /**
-     * 把教务解析结果**回传**到后端缓存（`POST /school/cache/course`）。
+     * 把教务解析结果**回传**到后端缓存（`POST /school/jiaowu/cache/course`）。
      *
      * ## 为什么这里要有上传
      *
@@ -163,11 +163,11 @@ class CourseRepository(
      *
      * ## 链路
      * ```
-     * ① DELETE /school/cache/course   让缓存失效（60s 内 429）
-     * ② GET    /school/cache/course   → cache_miss + 配方
+     * ① DELETE /school/jiaowu/cache/course   让缓存失效（60s 内 429）
+     * ② GET    /school/jiaowu/cache/course   → cache_miss + 配方
      * ③ 按配方 GET <address>（带下发 Cookie）→ 教务 HTML
      * ④ 解析 HTML（按 parser 名选规则）
-     * ⑤ POST   /school/cache/course   回传解析结果
+     * ⑤ POST   /school/jiaowu/cache/course   回传解析结果
      * ```
      *
      * @return 成功时带解析出的课程条数

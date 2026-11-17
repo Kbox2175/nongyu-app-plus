@@ -48,7 +48,7 @@ data class CourseItem(
  * 后端 schema 的顶层要求 `payload` + `schemaVersion` 两个字段；
  * `success` / `fetchedAt` 可选。这里只声明消费的部分。
  *
- * 注意：该 DTO 用于解析 **GET /school/cache/course 命中时**的 `payload` 字段内部数组，
+ * 注意：该 DTO 用于解析 **GET /school/jiaowu/cache/course 命中时**的 `payload` 字段内部数组，
  * 不是整个响应体 —— 响应体由 [CacheGetResponse] 承接（命中/未命中两种 200 形状）。
  */
 @Serializable

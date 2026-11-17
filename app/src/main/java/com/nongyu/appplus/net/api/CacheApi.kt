@@ -36,7 +36,7 @@ import retrofit2.http.Query
 interface CacheApi {
 
     /**
-     * `GET /school/cache/:dataType` —— 取缓存。
+     * `GET /school/jiaowu/cache/:dataType` —— 取缓存。
      *
      * ⚠️ **成功响应有两种 200 形状**：
      * - 命中：`{payload, success?, schemaVersion, fetchedAt, stale}`
@@ -49,14 +49,14 @@ interface CacheApi {
      * @param fallback 传 `1` 表示「客户端刚直连教务失败，请把旧数据给我」，
      *   只有这种调用后端才可能返回 `stale=true`。其余情况传 `null`。
      */
-    @GET("school/cache/{dataType}")
+    @GET("school/jiaowu/cache/{dataType}")
     suspend fun get(
         @Path("dataType") dataType: String,
         @Query("fallback") fallback: String? = null,
     ): Response<CacheGetResponse>
 
     /**
-     * `POST /school/cache/:dataType` —— 回传解析后的 JSON。
+     * `POST /school/jiaowu/cache/:dataType` —— 回传解析后的 JSON。
      *
      * 成功响应形状与 GET 命中时相同（[CacheSubmitResponse] 是 [CacheEnvelope] 的 typealias）。
      *
@@ -65,19 +65,19 @@ interface CacheApi {
      *
      * @param body 已序列化好的 JSON 文本（不是 `CacheDataType` 相关的 DTO —— payload 原样透传）
      */
-    @POST("school/cache/{dataType}")
+    @POST("school/jiaowu/cache/{dataType}")
     suspend fun submit(
         @Path("dataType") dataType: String,
         @Body body: RequestBody,
     ): Response<CacheSubmitResponse>
 
     /**
-     * `DELETE /school/cache/:dataType` —— 让本用户该类型的缓存失效。
+     * `DELETE /school/jiaowu/cache/:dataType` —— 让本用户该类型的缓存失效。
      *
      * 后端有 **60 秒失效间隔**，过频回 429 `refresh_too_soon` + `Retry-After` 响应头。
      * 成功回 `{"invalidated":true}`。
      */
-    @DELETE("school/cache/{dataType}")
+    @DELETE("school/jiaowu/cache/{dataType}")
     suspend fun invalidate(
         @Path("dataType") dataType: String,
     ): Response<CacheInvalidateDto>
