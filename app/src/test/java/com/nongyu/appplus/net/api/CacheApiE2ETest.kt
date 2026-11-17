@@ -80,7 +80,7 @@ class CacheApiE2ETest {
         assertTrue(e.payload is kotlinx.serialization.json.JsonArray)
 
         val req = server.takeRequest()
-        assertEquals("/school/cache/course", req.path)
+        assertEquals("/school/jiaowu/cache/course", req.path)
         assertEquals("Bearer TEST-TOKEN", req.getHeader("Authorization"))
     }
 
@@ -114,7 +114,7 @@ class CacheApiE2ETest {
 
         val path = server.takeRequest().path!!
         assertTrue("应带 fallback=1，实际 $path", path.contains("fallback=1"))
-        assertTrue(path.startsWith("/school/cache/exam"))
+        assertTrue(path.startsWith("/school/jiaowu/cache/exam"))
     }
 
     @Test
@@ -127,7 +127,7 @@ class CacheApiE2ETest {
 
         api.get(CacheDataType.PLAN)
 
-        assertEquals("/school/cache/plan", server.takeRequest().path)
+        assertEquals("/school/jiaowu/cache/plan", server.takeRequest().path)
     }
 
     // ---------- POST ----------
@@ -149,7 +149,7 @@ class CacheApiE2ETest {
 
         val req = server.takeRequest()
         assertEquals("POST", req.method)
-        assertEquals("/school/cache/course", req.path)
+        assertEquals("/school/jiaowu/cache/course", req.path)
         assertTrue(req.getHeader("Content-Type")!!.startsWith("application/json"))
         assertEquals("Bearer TEST-TOKEN", req.getHeader("Authorization"))
     }
@@ -209,6 +209,6 @@ class CacheApiE2ETest {
 
         api.get(CacheDataType.TEACHING_NOTICE)
 
-        assertEquals("/school/cache/teachingNotice", server.takeRequest().path)
+        assertEquals("/school/jiaowu/cache/teachingNotice", server.takeRequest().path)
     }
 }
