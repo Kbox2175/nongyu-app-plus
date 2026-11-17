@@ -17,7 +17,7 @@ import kotlinx.serialization.json.JsonElement
  */
 
 /**
- * GET `/school/cache/:dataType` 的**统一响应容器**：命中与未命中字段的并集。
+ * GET `/school/jiaowu/cache/:dataType` 的**统一响应容器**：命中与未命中字段的并集。
  *
  * 字段全部可空，因为任一形状都只填其中一部分。
  * 不要给任何一个字段写非空类型 —— 后端 `success` 用 `omitempty`、`payload`
@@ -44,6 +44,11 @@ data class CacheGetResponse(
     val cookies: List<IssuedCookie>? = null,
     val parser: String? = null,
     val session: String? = null,
+    // ---- 2026-11-16 之后（后端 16ea6b4）：缺入参类型补的两个字段 ----
+    /** 缺哪个入参（如「教室名关键词（bj）」）。只有缺入参的 4 类有值。 */
+    val needs: String? = null,
+    /** 缺入参时仍可用的骨架路径（不带 query），客户端自己拼。 */
+    val basePath: String? = null,
 ) {
     /** 判别这次 200 到底是命中还是未命中/错误。**只读 [code]，不猜其它字段。 */
     fun discriminate(): CacheResult = when {
@@ -56,6 +61,8 @@ data class CacheGetResponse(
             cookies = cookies.orEmpty(),
             parser = parser,
             session = session,
+            needs = needs,
+            basePath = basePath,
         )
 
         else -> CacheResult.Hit(
@@ -102,6 +109,9 @@ sealed class CacheResult {
      * @param cookies 教务会话 Cookie（`ASPSESSIONID*`），由后端用已保管的 tgt 换出。
      * @param parser 解析器名（如 `jiaowu-course-v1`），标识该用哪套字段规则解析 HTML。
      * @param session `ok` / `unavailable`。`unavailable` 表示后端拿不到教务会话，cookies 为空。
+     * @param needs 缺哪个入参（如「教室名关键词（bj）」）。**只有缺入参的 4 类有值**：
+     *   教室课表 / 教师课表 / 教师信息 / 教室信息。
+     * @param basePath 缺入参时仍可用的**骨架路径**（不带 query），客户端自己拼。
      */
     data class Miss(
         val code: String,
@@ -112,6 +122,8 @@ sealed class CacheResult {
         val cookies: List<IssuedCookie> = emptyList(),
         val parser: String? = null,
         val session: String? = null,
+        val needs: String? = null,
+        val basePath: String? = null,
     ) : CacheResult() {
 
         /** 是否「没有可用缓存」这一正常流程分支。 */
@@ -120,6 +132,17 @@ sealed class CacheResult {
         /** 后端是否给出了可执行的取数配方（地址 + 方法都有）。 */
         fun hasRecipe(): Boolean =
             !address.isNullOrBlank() && !method.isNullOrBlank()
+
+        /**
+         * 是否「缺入参」——`address` 为空但不是出错，需要用户补一个参数。
+         *
+         * 后端 16ea6b4 起：教室/教师这类必须用户输入的类型不下发完整地址，
+         * 只给 `needs`（缺什么）+ `basePath`（骨架路径）。
+         * **判断"是不是错误"不能只看 address 为空** —— 这种情况是正常流程，
+         * 应该提示用户补 `needs` 所述的入参，而不是报错。
+         */
+        fun needsInput(): Boolean =
+            !needs.isNullOrBlank() && address.isNullOrBlank()
 
         /** 教务会话是否可用（后端换票成功）。 */
         fun sessionAvailable(): Boolean = session == "ok" && cookies.isNotEmpty()
@@ -145,14 +168,14 @@ data class CacheEnvelope(
 )
 
 /**
- * POST `/school/cache/:dataType` 的成功响应。
+ * POST `/school/jiaowu/cache/:dataType` 的成功响应。
  *
  * 后端 `cacheSubmitHandler` 回的也是 `envelopeOf(snap)`，形状与 [CacheEnvelope] 相同，
  * 这里用 typealias 表达「同一形状」，避免复制一份 DTO 造成两处真源。
  */
 typealias CacheSubmitResponse = CacheEnvelope
 
-/** DELETE `/school/cache/:dataType` 的成功响应：`{"invalidated":true}`。 */
+/** DELETE `/school/jiaowu/cache/:dataType` 的成功响应：`{"invalidated":true}`。 */
 @Serializable
 data class CacheInvalidateDto(
     val invalidated: Boolean? = null,

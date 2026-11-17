@@ -117,6 +117,25 @@ object ApiErrorCode {
     /** nonce 存储不可用（503）。后端 **fail-closed**，不放行。 */
     const val APP_SIGN_UNAVAILABLE = "app_sign_unavailable"
 
+    // ---------- (H) WebVPN 网关票（backend-plus `jiaowu/webvpnhandler.go`） ----------
+
+    /**
+     * 尚未提交网关票（**409**）。
+     *
+     * 客户端据此行动：先把 `wengine_vpn_ticket` 通过 `POST /school/webvpn-session` 交上去，
+     * 再重试代取。
+     */
+    const val WEBVPN_TICKET_MISSING = "webvpn_ticket_missing"
+
+    /**
+     * 网关票已失效（**401**）。
+     *
+     * 与 identity 的 `session_expired` **语义不同**：这是**学校网关会话**过期，
+     * 不代表 App 登录态失效。客户端应引导用户重新登录网关并重新提交票，
+     * **绝不能因此清掉 App 登录态**。
+     */
+    const val WEBVPN_TICKET_EXPIRED = "webvpn_ticket_expired"
+
     // ---------- 兜底 ----------
 
     /**
@@ -131,6 +150,7 @@ object ApiErrorCode {
         AUTH_UNAVAILABLE, RATE_LIMITED, INVALID_REQUEST, NOT_FOUND, BAD_REQUEST,
         CACHE_MISS, SCHEMA_REJECTED, PAYLOAD_TOO_LARGE, REFRESH_TOO_SOON, CACHE_UNAVAILABLE,
         APP_SIGN_INVALID, APP_SIGN_TOO_LARGE, APP_SIGN_UNAVAILABLE,
+        WEBVPN_TICKET_MISSING, WEBVPN_TICKET_EXPIRED,
     )
 
     /**
