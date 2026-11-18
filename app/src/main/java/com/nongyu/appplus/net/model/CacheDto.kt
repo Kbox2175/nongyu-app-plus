@@ -49,6 +49,15 @@ data class CacheGetResponse(
     val needs: String? = null,
     /** 缺入参时仍可用的骨架路径（不带 query），客户端自己拼。 */
     val basePath: String? = null,
+    // ---- 2026-11-18（后端 9fc5219）：校外形态明确带回网关票状态 ----
+    /**
+     * WebVPN 网关票的**本地状态**。只在 `mode=vpn`（校外）时出现。
+     *
+     * ⚠️ 后端诚实边界：`cache_miss` 零出站，所以 `status=ready` 只表示
+     * 「本地保管着一张未被判死的票」，**不是**「网关保证放行」。
+     * 真正判死仍靠后续请求遇到的 302。
+     */
+    val webvpn: WebVpnGateDto? = null,
 ) {
     /** 判别这次 200 到底是命中还是未命中/错误。**只读 [code]，不猜其它字段。 */
     fun discriminate(): CacheResult = when {
@@ -63,6 +72,7 @@ data class CacheGetResponse(
             session = session,
             needs = needs,
             basePath = basePath,
+            webvpn = webvpn,
         )
 
         else -> CacheResult.Hit(
@@ -89,6 +99,56 @@ data class IssuedCookie(
     val value: String? = null,
 )
 
+/**
+ * WebVPN 网关票的**本地状态**（后端 `WebVPNGateResult`，2026-11-18 `9fc5219` 起随
+ * `cache_miss` 下发）。
+ *
+ * ## 为什么需要这个字段
+ * 原先校外形态只回 `session=client_side`，客户端**分不清**「还没登录网关」和
+ * 「已登录且票正常」—— 两者响应完全一样，导致「何时弹登录窗」没有信号源。
+ *
+ * ## 三个 status 与两个 code
+ *
+ * | status | code | 客户端该做什么 |
+ * | --- | --- | --- |
+ * | `ready` | 无 | **不弹窗**，直接用编码地址取数 |
+ * | `missing` | `webvpn_ticket_missing` | 弹窗：去登录网关 |
+ * | `expired` | `webvpn_ticket_expired` | 弹窗：重新登录网关 |
+ *
+ * ## ⚠️ 诚实边界（后端注释原话）
+ * `cache_miss` **零出站**，所以 `ready` 只表示「本地保管着一张未被判死的票」，
+ * **不是**「网关保证放行」。真正判死靠后续请求遇到的 302。
+ * 因此 `ready` 之后取数失败，仍要按「可能票失效」处理一次。
+ */
+@Serializable
+data class WebVpnGateDto(
+    val status: String? = null,
+    /** `missing` / `expired` 时才有值，与 `/fetch` 端点同码。 */
+    val code: String? = null,
+    /** 仅 `ready` 时有值（RFC3339）。 */
+    val expiresAt: String? = null,
+) {
+    /** 网关票状态是否为「可用」。 */
+    fun isReady(): Boolean = status == STATUS_READY
+
+    /**
+     * 是否需要弹窗引导用户登录网关。
+     *
+     * **只认 [code]**（与 `WebVpnErrorClassifier` 同一口径）：
+     * `missing` / `expired` 要弹；`ready` 与未知状态一律不弹。
+     */
+    fun needsLogin(): Boolean =
+        code == com.nongyu.appplus.net.core.ApiErrorCode.WEBVPN_TICKET_MISSING ||
+            code == com.nongyu.appplus.net.core.ApiErrorCode.WEBVPN_TICKET_EXPIRED
+
+    companion object {
+        /** 与后端 `WebVPNTicketState` 逐字一致。 */
+        const val STATUS_READY = "ready"
+        const val STATUS_MISSING = "missing"
+        const val STATUS_EXPIRED = "expired"
+    }
+}
+
 /** 判别结果。让调用方用一个 `when` 就能覆盖两种形状，不必自己判空。 */
 sealed class CacheResult {
     /** 缓存命中。 */
@@ -112,6 +172,7 @@ sealed class CacheResult {
      * @param needs 缺哪个入参（如「教室名关键词（bj）」）。**只有缺入参的 4 类有值**：
      *   教室课表 / 教师课表 / 教师信息 / 教室信息。
      * @param basePath 缺入参时仍可用的**骨架路径**（不带 query），客户端自己拼。
+     * @param webvpn 校外形态下的网关票本地状态。`mode=vpn` 时才出现。
      */
     data class Miss(
         val code: String,
@@ -124,10 +185,19 @@ sealed class CacheResult {
         val session: String? = null,
         val needs: String? = null,
         val basePath: String? = null,
+        val webvpn: WebVpnGateDto? = null,
     ) : CacheResult() {
 
         /** 是否「没有可用缓存」这一正常流程分支。 */
         fun isCacheMiss(): Boolean = code == com.nongyu.appplus.net.core.ApiErrorCode.CACHE_MISS
+
+        /**
+         * 是否需要弹窗引导用户登录 WebVPN 网关。
+         *
+         * 维护者拍板的触发条件：**只有票缺失或失效时才弹**。
+         * 校内形态（无 `webvpn` 字段）一律不弹。
+         */
+        fun needsWebVpnLogin(): Boolean = webvpn?.needsLogin() == true
 
         /** 后端是否给出了可执行的取数配方（地址 + 方法都有）。 */
         fun hasRecipe(): Boolean =

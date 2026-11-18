@@ -10,11 +10,8 @@ import com.nongyu.appplus.net.model.CourseItem
 import com.nongyu.appplus.timetable.logic.CourseHtmlParser
 import com.nongyu.appplus.timetable.logic.CourseScheduleParser
 import com.nongyu.appplus.timetable.model.CourseEntry
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -87,7 +84,11 @@ class CourseRepository(
      * `200 {"code":"cache_miss","message":"...","address":"https://webvpn..."}`
      * —— **地址就在这个响应里**，不需要另外请求 `/school/address`。
      *
-     * 这个地址已经过 WebVPN 改写并带上票据，客户端直接 GET 它就是教务课表页。
+     * ⚠️ **修正（2026-11-18）**：此前这里写「地址已过 WebVPN 改写并带上票据」是**错的**。
+     * 后端实际行为按 `X-Nongyu-Campus-Network` 分两种：
+     * - 校内（`direct`）：直连教务 URL，**cookies 有值**（后端用保管的 tgt 换出 `ASPSESSIONID`）
+     * - 校外（`vpn`）：WebVPN 编码地址，**cookies 恒为空** —— 网关票只能由客户端
+     *   自己登录网关产生，后端换不到。票的本地状态在 `webvpn` 字段里（见下）。
      */
     suspend fun loadOrMiss(): Result<Loaded> = runCatching {
         val api = NetHolder.cache(context)
@@ -226,6 +227,26 @@ class CourseRepository(
             is Loaded.Miss -> loaded.miss
             is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
         }
+
+        // ②-b 校外侧：票缺失/失效时投递一次登录弹窗（维护者定的唯一触发条件）
+        //
+        // 后端 2026-11-18（9fc5219）起，cache_miss 在校外形态下带回 webvpn 字段：
+        // status=missing/expired 时带 code，与 /fetch 端点同码。
+        // 只有「票缺失」或「票失效」才弹，ready 与校内形态一律不弹。
+        //
+        // 投递后**不阻塞**本次刷新：让既有链路继续跑（可能票其实还有效），
+        // 失败的提示由 UI 侧照常给。弹窗成功后用户重新登录，下次刷新即生效。
+        if (miss.needsWebVpnLogin()) {
+            val trigger = when (miss.webvpn?.code) {
+                com.nongyu.appplus.net.core.ApiErrorCode.WEBVPN_TICKET_EXPIRED ->
+                    com.nongyu.appplus.webvpn.model.WebVpnTrigger.TICKET_EXPIRED
+
+                else -> com.nongyu.appplus.webvpn.model.WebVpnTrigger.TICKET_MISSING
+            }
+            val decision = com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler.request(trigger)
+            android.util.Log.i("CourseRepo", "校外形态票无效（${miss.webvpn?.status}），弹窗调度=$decision")
+        }
+
         if (!miss.hasRecipe()) {
             error(
                 if (miss.sessionAvailable()) "后端未下发课表取数配方"
@@ -301,43 +322,36 @@ class CourseRepository(
      * 会把「我方后端的 Authorization / X-Nongyu-Signature」一并发给教务，
      * 既无意义也可能触发对方风控。教务会话由配方里的 Cookie 承载。
      */
-    private fun fetchByRecipe(recipe: CacheResult.Miss): String {
-        val url = recipe.address ?: error("配方缺少地址")
-        val method = recipe.method.orEmpty().ifBlank { "GET" }
-
-        // 按配方装 Cookie（名字/值都由后端给，不自己编）
-        val cookieHeader = recipe.cookies
-            .mapNotNull { c ->
-                val n = c.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val v = c.value.orEmpty()
-                "$n=$v"
-            }
-            .joinToString("; ")
-
-        val builder = Request.Builder().url(url)
-        if (cookieHeader.isNotEmpty()) builder.header("Cookie", cookieHeader)
-        // 当前后端只下发 GET；出现别的方式按它执行，不硬编码
-        val req = when (method.uppercase()) {
-            "GET" -> builder.get().build()
-            else -> error("不支持的请求方式：$method")
-        }
-
-        val client = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .build()
-
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("拉取教务页面失败：HTTP ${resp.code}")
-            val body = resp.body ?: error("教务响应为空")
-            // 教务页多为 GBK；按 Content-Type 声明的字符集解码，缺省按 GBK
-            val bytes = body.bytes()
-            val contentType = resp.header("Content-Type").orEmpty()
-            val charsetName = Regex("charset=([A-Za-z0-9_\\-]+)")
-                .find(contentType)?.groupValues?.get(1) ?: "GBK"
-            return String(bytes, charset(charsetName))
-        }
-    }
+    /**
+     * 按后端下发的配方发请求，拉回教务 HTML。
+     *
+     * ## 执行逻辑已抽到 [RecipeFetcher]
+     *
+     * 原先本方法自带一份「装 Cookie → 发请求 → 按 charset 解码」的实现。
+     * 15 类回传数据用的是同一个取数模型，抽到 `net/core/RecipeFetcher` 后本类只保留
+     * 「课表特有的部分」（解析器选择、回传、写本地缓存）。
+     *
+     * ## 客户端不自己填任何一项
+     *
+     * 地址、方法、Cookie 全部取自 [CacheResult.Miss]（后端给的）。
+     *
+     * ## 为什么用独立 OkHttp
+     *
+     * 不复用 [NetHolder] 的 client：那个挂了 `AuthInterceptor` 与 `AppSignInterceptor`，
+     * 会把「我方后端的 Authorization / X-Nongyu-Signature」一并发给教务，
+     * 既无意义也可能触发对方风控。教务会话由配方里的 Cookie 承载。
+     *
+     * ⚠️ 同步阻塞，调用方必须已在 IO 线程（见 `refreshFromJiaowu` 的 `withContext`）。
+     */
+    private fun fetchByRecipe(recipe: CacheResult.Miss): String =
+        com.nongyu.appplus.net.core.RecipeFetcher.fetch(
+            address = recipe.address,
+            method = recipe.method,
+            cookies = recipe.cookies.mapNotNull { c ->
+                val name = c.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                com.nongyu.appplus.net.core.RecipeFetcher.CookiePair(name, c.value.orEmpty())
+            },
+        )
 
     /**
      * 更新过于频繁（后端 60 秒失效间隔，`429 refresh_too_soon`）。
