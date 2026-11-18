@@ -933,6 +933,18 @@ fun MainShell() {
                             settingsOpen = false
                             updateTimetableOnce()
                         }
+
+                        TimetableSettings.Keys.WebVpnLogin -> {
+                            // 手动调度 WebVPN 登录弹窗：先收起设置面板（弹窗在根节点最顶层，
+                            // 面板动画期间同时显示会打架），再投递 MANUAL 触发源。
+                            // MANUAL 是显式操作，绕过「不同意」的抑制。
+                            settingsOpen = false
+                            com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler
+                                .request(
+                                    com.nongyu.appplus.webvpn.model.WebVpnTrigger.MANUAL,
+                                )
+                        }
+
                         else -> Unit
                     }
                 },

@@ -10,6 +10,7 @@ import com.nongyu.appplus.login.session.SessionStartupVerifier
 import com.nongyu.appplus.login.model.VerificationResult
 import com.nongyu.appplus.net.NetHolder
 import com.nongyu.appplus.net.NetStartupProbe
+import com.nongyu.appplus.webvpn.data.WebVpnErrorDispatcher
 import com.nongyu.appplus.skin.FileSkinSource
 import com.nongyu.appplus.NongyuApp
 import com.nongyu.appplus.design.NongyuAppPlusTheme
@@ -67,6 +68,11 @@ class MainActivity : ComponentActivity() {
         // 票 #90：首帧前用会话存储判定落地去向（只读本地，不碰网络，ADR-0006）。
         // 同一 SessionStore 实例由 NetHolder 持有，供 token 来源 / 失效分流 / 校验复用。
         LoginSessionHolder.initialize(NetHolder.sessionStore(applicationContext))
+
+        // WebVPN：后端票缺失/失效（409/401）时驱动顶层登录弹窗。
+        // 与上面会话失效回调用同一套「UI → net 注入」做法：只存函数引用，
+        // 不装配网络、不发请求（ADR-0006 安全）。判定与闸门都在 webvpn/ 侧。
+        NetHolder.setOnWebVpnTicketRequired(WebVpnErrorDispatcher::dispatch)
 
         setContent {
             NongyuAppPlusTheme(
