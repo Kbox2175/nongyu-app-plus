@@ -15,8 +15,33 @@
 | 3 | 登录学校 WebVPN | 卡片内 `WebView` 加载 `https://webvpn.sicau.edu.cn/login`，CAS 登录后从 `CookieManager` 提取网关票 |
 | 4 | 置于最顶层 | `WebVpnDialogHost` 挂在 `NongyuApp` 根 `Box` **最后一个子节点**，在 `MainShell` / 登录中心 / 设置面板之上 |
 | 5 | 符合当前风格 | `NongyuTheme.colors` + `uiScaleFor` + `RoundedCornerShape` + 品牌绿主按钮（与 `JumpToDateDialog` / `FormButton` 同族） |
-| 6 | 不同意登录 | 卡片常驻「不同意」按钮 → `WebVpnDialogScheduler.decline()`，写会话级同意态，抑制后续自动调度 |
+| 6 | 不同意登录 | 卡片底部「不同意」按钮 → `WebVpnDialogScheduler.decline()`，写会话级同意态，抑制后续自动调度。右上角另有一个 **X（关闭）**：只关窗、不表达拒绝（等同 `dismiss()`），自动调度下次仍会再来 |
 | 7 | 登录后 / 被其他调度后生效 | 4 个触发源：`SIGNED_IN` / `TICKET_MISSING` / `TICKET_EXPIRED` / `MANUAL`，统一走 `WebVpnDialogScheduler.request()` |
+| 8 | 辅助填入账密/手机号 | 卡片内「辅助填入」栏：账号 + 密码输入、「记住」勾选、「填入登录页面」按钮 → `WebVpnAutofill` 拼装并转义注入脚本，`WebView.evaluateJavascript` 写进学校登录页。登录成功且勾选「记住」时经 `WebVpnCredentialStore`（Keystore + AES/GCM）持久保存，下次自动读出并待页面加载完成后注入 |
+
+### 2.1 右上角 X 与底部「不同意」的区别（2026-11-18 维护者要求）
+
+| 控件 | 语义 | 对同意态的影响 | 后续自动调度 |
+| --- | --- | --- | --- |
+| 右上角 **X** | 中性关闭 | 不变（`dismiss()`） | 仍会再来 |
+| 底部 **不同意** | 明确拒绝 | 写入 `DECLINED` | 被抑制（`MANUAL` 除外） |
+
+两者刻意不合并：把「不想现在看」与「以后都别问」混在一个按钮上，
+会让用户在只想关窗时被永久静音，或在想永久拒绝时又被反复打扰。
+
+### 2.2 账密持久化的安全边界
+
+- **存储**：`WebVpnCredentialStore` → DataStore（`nongyu_secure_webvpn`）+ Keystore AES/GCM，
+  与 `net/auth/MinimalSessionStore` 同一套结构，但**文件名与密钥别名都不同**，
+  避免「登出清会话」与「删除账密」互相误伤。
+- **备份**：两个备份规则文件都排除该 DataStore（云端 + 换机直传），
+  由 `WebVpnCredentialStoreContractTest` 与 `SecurePrefsNameConsistencyTest` 双重断言。
+- **注入安全**：`WebVpnAutofill.jsStringLiteral` 逐字符转义（含 `\`、引号、换行、
+  U+2028/U+2029，非 ASCII 走 `\uXXXX`），保证用户输入永远只是字面量、不能跳出字符串。
+- **只填不读**：注入脚本只做 `el.value = ...` + 派发 `input`/`change`，
+  不把页面任何内容回传原生层。
+- **登录成功才落盘**：只有后端确认收了票才保存该账号密码（证明凭据真的有效）；
+  不勾「记住」则只在该次弹窗内存里用一次。
 
 ## 2. 数据流
 

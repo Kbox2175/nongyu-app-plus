@@ -8,7 +8,11 @@
 
   注意：排除规则只是第一道防线，不可能穷举所有备份通道（ADB、厂商云、部分工具的
   私有通道）。所以 MinimalSessionStore.readToken() 必须自己容错 ——
-  解不开 = 视为无 token 并清空。-->
+  解不开 = 视为无 token 并清空。
+
+  WebVPN 账号密码（com.nongyu.appplus.webvpn.data.WebVpnCredentialStore）同样排除：
+  这是**学校账号密码**，比会话令牌更敏感，绝不能进云备份或换机直传。-->
 <full-backup-content>
     <exclude domain="file" path="datastore/nongyu_secure_session.preferences_pb" />
+    <exclude domain="file" path="datastore/nongyu_secure_webvpn.preferences_pb" />
 </full-backup-content>

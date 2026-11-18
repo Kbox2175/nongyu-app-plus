@@ -29,6 +29,16 @@ class SecurePrefsNameConsistencyTest {
 
     private val expectedPath = SecurePrefs.BACKUP_EXCLUDE_PATH
 
+    /**
+     * WebVPN 学校账号密码的排除路径。
+     *
+     * 它与会话令牌是**两个独立的 DataStore 文件**（见 `WebVpnCredentialStore` 类注释：
+     * 别名与文件名都必须分开，否则登出清会话会把密码一起废掉）。
+     * 两边都要被两个备份规则文件排除，所以这里一并断言。
+     */
+    private val expectedWebVpnPath =
+        com.nongyu.appplus.webvpn.data.WebVpnCredentialStore.BACKUP_EXCLUDE_PATH
+
     private fun read(relative: String): String {
         val f = File(relative)
         assertTrue("找不到文件：${f.absolutePath}（单测工作目录应为模块目录 app/）", f.exists())
@@ -54,11 +64,17 @@ class SecurePrefsNameConsistencyTest {
         )
 
         val pairs = excludes(xml)
-        assertEquals("应在两个段里各写一条 exclude", 2, pairs.size)
+        assertEquals("应在两个段里各写两条 exclude（会话令牌 + WebVPN 账密）", 4, pairs.size)
         pairs.forEach { (domain, path) ->
             assertEquals("排除的 domain 必须是 file（DataStore 落在 files/ 下）", "file", domain)
-            assertEquals("排除的路径与 SecurePrefs.BACKUP_EXCLUDE_PATH 不一致", expectedPath, path)
+            assertTrue(
+                "出现了预期外的排除路径：$path",
+                path == expectedPath || path == expectedWebVpnPath,
+            )
         }
+        // 两个文件都必须被排除两次（cloud-backup / device-transfer 各一次）
+        assertEquals(2, pairs.count { it.second == expectedPath })
+        assertEquals(2, pairs.count { it.second == expectedWebVpnPath })
     }
 
     @Test
@@ -68,9 +84,10 @@ class SecurePrefsNameConsistencyTest {
         assertTrue("缺少 <full-backup-content> 段", xml.contains("<full-backup-content>"))
 
         val pairs = excludes(xml)
-        assertEquals(1, pairs.size)
-        assertEquals("file", pairs.first().first)
-        assertEquals(expectedPath, pairs.first().second)
+        assertEquals("应有两条 exclude（会话令牌 + WebVPN 账密）", 2, pairs.size)
+        pairs.forEach { (domain, _) -> assertEquals("file", domain) }
+        assertEquals(1, pairs.count { it.second == expectedPath })
+        assertEquals(1, pairs.count { it.second == expectedWebVpnPath })
     }
 
     @Test

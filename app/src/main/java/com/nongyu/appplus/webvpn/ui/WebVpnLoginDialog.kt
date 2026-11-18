@@ -8,6 +8,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,17 +38,25 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nongyu.appplus.design.NongyuTheme
+import com.nongyu.appplus.webvpn.data.WebVpnCredentialStore
 import com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler
 import com.nongyu.appplus.webvpn.data.WebVpnSessionRepository
+import com.nongyu.appplus.webvpn.logic.WebVpnAutofill
 import com.nongyu.appplus.webvpn.logic.WebVpnTicket
 import com.nongyu.appplus.webvpn.model.WebVpnDialogUiState
 import com.nongyu.appplus.webvpn.model.WebVpnGateway
@@ -53,7 +64,9 @@ import com.nongyu.appplus.webvpn.model.WebVpnLoginPhase
 import com.nongyu.appplus.webvpn.model.WebVpnRequest
 import com.nongyu.appplus.webvpn.model.WebVpnSubmitResult
 import com.nongyu.appplus.webvpn.model.WebVpnTrigger
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 学校 WebVPN 登录子窗体（**根节点最顶层浮层**）。
@@ -109,6 +122,26 @@ fun WebVpnLoginDialog(
     val lastFinishedUrl = remember(request.nonce) { mutableStateOf<String?>(null) }
     var webViewReloadKey by remember(request.nonce) { mutableIntStateOf(0) }
 
+    // ---- 账号密码辅助填入（用户 2026-11-18 要求；持久保存走 Keystore+AES/GCM）----
+    val credentialStore = remember { WebVpnCredentialStore(context.applicationContext) }
+    var account by remember(request.nonce) { mutableStateOf("") }
+    var password by remember(request.nonce) { mutableStateOf("") }
+    var rememberCredential by remember(request.nonce) { mutableStateOf(true) }
+    var savedCredentialLoaded by remember(request.nonce) { mutableStateOf(false) }
+    // 已保存的账号密码：页面加载完后自动注入
+    var pendingAutofill by remember(request.nonce) { mutableStateOf(false) }
+
+    // 首次打开：把已保存的账号密码读进内存（解密在 IO 线程，避免卡首帧）
+    LaunchedEffect(request.nonce) {
+        val saved = withContext(Dispatchers.IO) { credentialStore.read() }
+        if (saved != null && !savedCredentialLoaded) {
+            account = saved.account
+            password = saved.password
+            pendingAutofill = true
+        }
+        savedCredentialLoaded = true
+    }
+
     /** 读网关票：CookieManager 拿的是整条 Cookie 头，形态校验交纯逻辑层。 */
     fun readTicket(): String? = try {
         WebVpnTicket.extract(
@@ -129,6 +162,12 @@ fun WebVpnLoginDialog(
         scope.launch {
             when (val result = repository.submit(ticket)) {
                 is WebVpnSubmitResult.Success -> {
+                    // 登录成功才落盘账号密码：只有这时才证明这组凭据真的有效。
+                    if (rememberCredential && WebVpnAutofill.canAutofill(account, password)) {
+                        withContext(Dispatchers.IO) {
+                            credentialStore.save(account.trim(), password)
+                        }
+                    }
                     uiState = uiState.copy(phase = WebVpnLoginPhase.DONE)
                     WebVpnDialogScheduler.complete()
                 }
@@ -154,6 +193,26 @@ fun WebVpnLoginDialog(
         if (left && ticket != null && ticket != probe.guestTicket) {
             probe.submitted = true
             submitTicket(ticket)
+        }
+    }
+
+    /** 把账号密码注入当前 WebView 页面（脚本由纯逻辑层拼装并转义）。 */
+    fun autofillInto(webView: WebView?) {
+        if (webView == null) return
+        if (!WebVpnAutofill.canAutofill(account, password)) return
+        webView.evaluateJavascript(
+            WebVpnAutofill.buildInjectScript(account.trim(), password),
+            null,
+        )
+    }
+
+    // 登录页每次加载完成，若有待注入的账号密码就填一次（只填一次，避免反复覆盖用户手改）
+    LaunchedEffect(lastFinishedUrl.value, pendingAutofill) {
+        if (!pendingAutofill) return@LaunchedEffect
+        val url = lastFinishedUrl.value ?: return@LaunchedEffect
+        if (WebVpnTicket.isStillOnLoginPage(url)) {
+            autofillInto(probe.webView)
+            pendingAutofill = false
         }
     }
 
@@ -194,7 +253,11 @@ fun WebVpnLoginDialog(
                 )
                 .padding(s(16.dp)),
         ) {
-            // 标题行：右上角「不同意」常驻
+            // 标题行：右上角 X 关闭
+            //
+            // 维护者 2026-11-18 要求把「不同意」换成 X：X 是**中性的关闭**——
+            // 只关窗、不表达拒绝，所以自动调度下次仍会再来（等同 dismiss）。
+            // 「明确不同意登录」的语义移到卡片底部的「不同意」按钮上，两者不混用。
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -207,16 +270,7 @@ fun WebVpnLoginDialog(
                     fontWeight = FontWeight.ExtraBold,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
-                    text = "不同意",
-                    color = colors.surface.colorTextSecondary,
-                    fontSize = (9f * uiScale).sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(s(8.dp)))
-                        .clickable { WebVpnDialogScheduler.decline() }
-                        .padding(horizontal = s(8.dp), vertical = s(5.dp)),
-                )
+                CloseCrossButton(uiScale = uiScale) { WebVpnDialogScheduler.dismiss() }
             }
 
             Spacer(Modifier.height(s(6.dp)))
@@ -235,6 +289,30 @@ fun WebVpnLoginDialog(
                 lineHeight = (11f * uiScale).sp,
             )
             Spacer(Modifier.height(s(10.dp)))
+
+            // ---- 账号密码辅助填入（仅登录页阶段显示）----
+            //
+            // 学校登录页是跨域 SPA，App 无法直接控制它的输入框，只能注入脚本。
+            // 这里给用户一个明确的、可撤销的入口；不勾「记住」就绝不留存。
+            if (uiState.phase == WebVpnLoginPhase.LOADING ||
+                uiState.phase == WebVpnLoginPhase.FAILED
+            ) {
+                CredentialAssistBar(
+                    uiScale = uiScale,
+                    account = account,
+                    password = password,
+                    remember = rememberCredential,
+                    onAccountChange = { account = it },
+                    onPasswordChange = { password = it },
+                    onRememberChange = { rememberCredential = it },
+                    onFill = {
+                        autofillInto(probe.webView)
+                        uiState = uiState.copy(errorText = null)
+                    },
+                    canFill = WebVpnAutofill.canAutofill(account, password),
+                )
+                Spacer(Modifier.height(s(8.dp)))
+            }
 
             // ---- 主体：说明 / WebView ----
             Box(
@@ -320,8 +398,196 @@ fun WebVpnLoginDialog(
     }
 }
 
-/** 未同意前的说明区（纯文字，不加载任何页面 —— 不碰网络直到用户明确同意）。 */
+/**
+ * 账号密码辅助栏：两个输入框 + 「记住」勾选 + 「填入页面」按钮。
+ *
+ * ## 为什么不直接把密码填进 WebView 的表单
+ *
+ * 我们能控制的只有原生输入框；学校页面的输入框在跨域 SPA 里，只能靠
+ * `WebView.evaluateJavascript` 注入。所以这里的定位是**代填助手**：
+ * 用户在这里输入（或复用已保存的），点一下填进页面，再由用户自己在页面点登录。
+ * 这样任何时刻用户都能看到、改掉、清掉要提交的内容，而不是黑盒。
+ *
+ * ## 密码框
+ *
+ * 用 `PasswordVisualTransformation` 遮显；不提供「显示密码」以免肩窥。
+ */
 @Composable
+private fun CredentialAssistBar(
+    uiScale: Float,
+    account: String,
+    password: String,
+    remember: Boolean,
+    onAccountChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onRememberChange: (Boolean) -> Unit,
+    onFill: () -> Unit,
+    canFill: Boolean,
+) {
+    val colors = NongyuTheme.colors
+    fun s(dp: Dp): Dp = (dp.value * uiScale).dp
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(s(10.dp)))
+            .background(colors.surface.colorBackground)
+            .padding(s(10.dp)),
+        verticalArrangement = Arrangement.spacedBy(s(6.dp)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "辅助填入",
+                color = colors.surface.colorTextSecondary,
+                fontSize = (8.5f * uiScale).sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            DecideChip(
+                label = if (remember) "☑ 记住" else "☐ 记住",
+                uiScale = uiScale,
+                active = remember,
+                onClick = { onRememberChange(!remember) },
+            )
+        }
+
+        AssistField(
+            uiScale = uiScale,
+            value = account,
+            placeholder = "学号 / 手机号",
+            isPassword = false,
+            onValueChange = onAccountChange,
+        )
+        AssistField(
+            uiScale = uiScale,
+            value = password,
+            placeholder = "密码",
+            isPassword = true,
+            onValueChange = onPasswordChange,
+        )
+
+        CardButton(
+            label = "填入登录页面",
+            uiScale = uiScale,
+            modifier = Modifier.fillMaxWidth(),
+            primary = canFill,
+            onClick = onFill,
+            enabled = canFill,
+        )
+    }
+}
+
+@Composable
+private fun AssistField(
+    uiScale: Float,
+    value: String,
+    placeholder: String,
+    isPassword: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    val colors = NongyuTheme.colors
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape((7f * uiScale).dp))
+            .background(colors.surface.colorCard)
+            .padding(horizontal = (8f * uiScale).dp, vertical = (6f * uiScale).dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(
+                color = colors.surface.colorText,
+                fontSize = (9.5f * uiScale).sp,
+            ),
+            visualTransformation = if (isPassword) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (isPassword) KeyboardType.Password else KeyboardType.Text,
+            ),
+            decorationBox = { inner ->
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        color = colors.surface.colorTextSecondary.copy(alpha = 0.6f),
+                        fontSize = (9.5f * uiScale).sp,
+                    )
+                }
+                inner()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun DecideChip(
+    label: String,
+    uiScale: Float,
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = NongyuTheme.colors
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape((7f * uiScale).dp))
+            .background(
+                if (active) colors.brand.colorBrandMuted else colors.surface.colorCard,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = (8f * uiScale).dp, vertical = (4f * uiScale).dp),
+    ) {
+        Text(
+            text = label,
+            color = if (active) colors.brand.colorBrand else colors.surface.colorTextSecondary,
+            fontSize = (8f * uiScale).sp,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/** 右上角 X 关闭（与设置面板右上角 CloseCross 同一套观感：两条 45° 短线）。 */
+@Composable
+private fun CloseCrossButton(uiScale: Float, onClick: () -> Unit) {
+    val colors = NongyuTheme.colors
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape((8f * uiScale).dp))
+            .clickable(onClick = onClick)
+            // 命中区放大到 ~28dp，视觉叉仍是小尺寸
+            .padding((7f * uiScale).dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val len = (11f * uiScale).dp
+        val stroke = (1.6f * uiScale).dp
+        Canvas(modifier = Modifier.size(len)) {
+            val inset = stroke.toPx()
+            drawLine(
+                color = colors.surface.colorTextSecondary,
+                start = Offset(inset, inset),
+                end = Offset(this.size.width - inset, this.size.height - inset),
+                strokeWidth = inset,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color = colors.surface.colorTextSecondary,
+                start = Offset(this.size.width - inset, inset),
+                end = Offset(inset, this.size.height - inset),
+                strokeWidth = inset,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/** 未同意前的说明区（纯文字，不加载任何页面 —— 不碰网络直到用户明确同意）。 */@Composable
 private fun IdleExplainer(uiScale: Float) {
     val colors = NongyuTheme.colors
     fun s(dp: Dp): Dp = (dp.value * uiScale).dp
@@ -365,6 +631,7 @@ private fun GatewayWebView(
                 setAcceptCookie(true)
             }
             WebView(ctx).apply {
+                probe.webView = this
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -503,6 +770,8 @@ private class WebVpnLoginProbe {
     var started: Boolean = false
     var guestTicket: String? = null
     var submitted: Boolean = false
+    /** 当前 WebView 实例引用：供自动填入调用 `evaluateJavascript`。 */
+    var webView: WebView? = null
 }
 
 private fun subtitleOf(trigger: WebVpnTrigger): String = when (trigger) {
