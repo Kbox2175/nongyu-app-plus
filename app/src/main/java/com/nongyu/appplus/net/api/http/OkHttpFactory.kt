@@ -64,6 +64,7 @@ object OkHttpFactory {
         logger: NongyuLogger = NongyuLogger.Noop,
         requestSigner: AppRequestSigner? = null,
         webVpnTicketRequired: ((code: String?, status: Int) -> Unit)? = null,
+        campusNetworkEnabled: Boolean = false,
     ): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -77,6 +78,12 @@ object OkHttpFactory {
             .addInterceptor(AuthInterceptor(tokenProvider, logger))
         if (requestSigner != null) {
             builder.addInterceptor(AppSignInterceptor(requestSigner))
+        }
+        // 校内/校外判定头：挂在校验层之内。
+        // 默认 false —— 测试与无关调用点行为与改动前逐字一致。
+        // 判定为 Unknown 时拦截器自身不发头（见 CampusNetworkState.headerValue）。
+        if (campusNetworkEnabled) {
+            builder.addInterceptor(CampusNetworkInterceptor())
         }
         // WebVPN 票失效转发：最内层（拿到最终响应即可，不需要在鉴权之前）。
         // 为 null 时完全不装配 —— 测试与无关调用点行为与改动前逐字一致。

@@ -56,6 +56,20 @@ data class SchoolLogoutAckDto(
 )
 
 /**
+ * `POST /school/presence` 的**请求体**。
+ *
+ * 后端 `presence.reportRequest` 只收一个 `mode` 字段，且**身份永远来自认证中间件**
+ * （`school.CtxUserID`），**绝不接受请求体里的 userID** —— 否则任何人都能给别人账户写状态。
+ *
+ * `mode` 只允许 `direct` / `vpn`（后端 `IsValidMode`），其它值一律 400 `invalid_presence`。
+ * 所以本 DTO 的 `mode` 是必填（非可空），从类型上就挡住「忘了填」。
+ */
+@Serializable
+data class PresenceReportRequest(
+    val mode: String,
+)
+
+/**
  * `POST /school/presence` 的成功响应。
  *
  * ⚠️ 键名是 **`userID`**（大写 ID），不是 `userId`。照抄后端，不加 `@SerialName`。

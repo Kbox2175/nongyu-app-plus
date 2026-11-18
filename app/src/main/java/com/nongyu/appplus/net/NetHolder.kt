@@ -4,6 +4,7 @@ import android.content.Context
 import com.nongyu.appplus.net.api.CacheApi
 import com.nongyu.appplus.net.api.SchoolApi
 import com.nongyu.appplus.net.api.IdentityApi
+import com.nongyu.appplus.net.api.PresenceApi
 import com.nongyu.appplus.net.api.WebVpnApi
 import com.nongyu.appplus.net.auth.DefaultSessionInvalidListener
 import com.nongyu.appplus.net.auth.MinimalSessionStore
@@ -159,6 +160,7 @@ object NetHolder {
         val retrofit = buildRetrofit(context).also { retrofitRef = it }
         return NongyuGateWay(
             identity = retrofit.create(IdentityApi::class.java),
+            presence = retrofit.create(PresenceApi::class.java),
             baseUrl = retrofit.baseUrl().toString(),
         )
     }
@@ -186,6 +188,8 @@ object NetHolder {
             // 把 401/409 的码转交 UI 侧判定「要不要弹 WebVPN 登录窗」。
             // 抓的是注入瞬间的引用：回调本身由 UI 侧常驻单例承载，不会失效。
             webVpnTicketRequired = { code, status -> onWebVpnTicketRequired?.invoke(code, status) },
+            // 校内/校外判定头：唯一开启点（其它调用点默认 false）。
+            campusNetworkEnabled = true,
         )
 
         // 4) baseUrl 规范化（空串会在这里抛带明确文案的异常，不静默失败）

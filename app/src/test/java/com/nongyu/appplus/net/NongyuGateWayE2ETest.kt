@@ -61,7 +61,11 @@ class NongyuGateWayE2ETest {
             .client(client)
             .addConverterFactory(NetJson.converterFactory())
             .build()
-        return NongyuGateWay(retrofit.create(IdentityApi::class.java), baseUrl) to logs
+        return NongyuGateWay(
+            retrofit.create(IdentityApi::class.java),
+            retrofit.create(com.nongyu.appplus.net.api.PresenceApi::class.java),
+            baseUrl,
+        ) to logs
     }
 
     // ---------- 成功路径：路径拼装 + DTO 反序列化 ----------

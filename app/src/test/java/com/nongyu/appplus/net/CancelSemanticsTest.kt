@@ -159,6 +159,7 @@ class CancelSemanticsTest {
             .build()
         return NongyuGateWay(
             identity = retrofit.create(com.nongyu.appplus.net.api.IdentityApi::class.java),
+            presence = retrofit.create(com.nongyu.appplus.net.api.PresenceApi::class.java),
             baseUrl = baseUrl,
         )
     }
