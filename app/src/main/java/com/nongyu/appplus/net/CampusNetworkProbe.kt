@@ -68,6 +68,19 @@ object CampusNetworkProbe {
     /** 上报超时。上报失败不影响判定本身。 */
     private const val REPORT_TIMEOUT_MILLIS = 5_000L
 
+    /**
+     * 两次探测之间的最小间隔。
+     *
+     * `registerDefaultNetworkCallback` 注册后会**立刻回调一次 `onAvailable`**（当前网络），
+     * 与 `schedule` 的首次探测几乎同时发生。用 3 秒间隔把这一次节流掉，
+     * 避免启动时打两次请求、上报两次。
+     */
+    private const val MIN_PROBE_INTERVAL_MILLIS = 3_000L
+
+    /** 上次探测的时刻（毫秒）。用于节流。 */
+    @Volatile
+    private var lastProbeAtMillis: Long = 0L
+
     @Volatile
     private var alreadyScheduled = false
 
@@ -78,6 +91,7 @@ object CampusNetworkProbe {
     internal fun resetForTest() {
         alreadyScheduled = false
         networkCallback = null
+        lastProbeAtMillis = 0L
     }
 
     /**
@@ -101,11 +115,17 @@ object CampusNetworkProbe {
         }
     }
 
-    /**
-     * 注册默认网络变化监听，网络切换时重新探测。
+    /** 注册默认网络变化监听，网络切换时重新探测。
      *
      * 用 `registerDefaultNetworkCallback`（API 24+，本工程 minSdk 26 满足）。
      * 注册失败只记日志 —— 不能因为监听听不上就把 App 弄崩。
+     *
+     * ⚠️ **必须声明 `ACCESS_NETWORK_STATE` 权限**，否则这里抛 `SecurityException`
+     * （真机实测 2026-11-18）。见 `AndroidManifest.xml`。
+     *
+     * ⚠️ `onAvailable` 在注册后**会立刻回调一次**（当前网络），所以启动时会与
+     * [probeAndReport] 各探一次。这不是 bug，但要让二者不互相覆盖：
+     * 用 [lastProbeAtMillis] + [MIN_PROBE_INTERVAL_MILLIS] 做节流。
      */
     private fun registerNetworkCallback(context: Context) {
         try {
@@ -113,7 +133,11 @@ object CampusNetworkProbe {
                 ?: return
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    // 网络切换后重探：覆盖「走进校园 / 关掉 Wi-Fi」等场景。
+                    // 注册后立即回调的那一次可能紧挨着 schedule 的探测，节流掉。
+                    if (System.currentTimeMillis() - lastProbeAtMillis < MIN_PROBE_INTERVAL_MILLIS) {
+                        Log.i(TAG, "网络变化距上次探测过近，跳过")
+                        return
+                    }
                     Log.i(TAG, "网络变化，重新探测校内/校外")
                     probeAsync()
                 }
@@ -130,6 +154,7 @@ object CampusNetworkProbe {
     private fun probeAsync() {
         Thread {
             try {
+                lastProbeAtMillis = System.currentTimeMillis()
                 val presence = detectPresence()
                 applyPresence(presence)
             } catch (e: Throwable) {
@@ -145,6 +170,7 @@ object CampusNetworkProbe {
      */
     internal suspend fun probeAndReport(context: Context) {
         try {
+            lastProbeAtMillis = System.currentTimeMillis()
             val presence = withContext(Dispatchers.IO) { detectPresence() }
             applyPresence(presence)
             report(context, presence)
