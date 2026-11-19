@@ -43,6 +43,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -376,30 +379,71 @@ fun FormField(
     // 密码可见性：睁眼=明文，闭眼（默认）=星号
     var passwordVisible by remember { mutableStateOf(false) }
 
+    // 聚焦/失焦的平滑过渡：0 = 失焦，1 = 聚焦。
+    // 用 animateFloatAsState 而不是 Animatable + LaunchedEffect，
+    // 与课表 BackToWeekFab 的既有做法一致（后者在父级重组时可能被反复重启）。
+    val focusProgress by animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "fieldFocus",
+    )
+
+    val corner = 14f.scaledDp(uiScale)
+    val height = 52f.scaledDp(uiScale)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(48f.scaledDp(uiScale)),
+            .height(height),
     ) {
-        // 底色 + 描边（矢量）
+        // 输入框外观（矢量绘制，单层 Canvas 画完：
+        // 微阴影 → 填充 → 低对比边框 → 聚焦淡光晕）
         Canvas(modifier = Modifier.fillMaxSize()) {
+            val cr = CornerRadius(corner.toPx(), corner.toPx())
+            val outline = colors.surface.colorOutline
+            val brand = colors.brand.colorBrand
+
+            // ① 微阴影：往下偏移 2dp 的一层极淡暗色，制造「浮起」而非「贴上去」
+            //    不用 Modifier.shadow() 是因为它在圆角矩形上偏硬、且颜色不可调。
             drawRoundRect(
-                color = colors.surface.colorCard,
-                cornerRadius = CornerRadius(12f.scaledDp(uiScale).toPx(), 12f.scaledDp(uiScale).toPx()),
+                color = Color(0xFF14301F).copy(alpha = 0.05f),
+                topLeft = Offset(0f, 2f.scaledDp(uiScale).toPx()),
+                size = Size(size.width, size.height),
+                cornerRadius = cr,
             )
+
+            // ② 填充：纯白卡片（与主题 colorCard 一致），不透明以压住背景光晕
+            drawRoundRect(color = colors.surface.colorCard, cornerRadius = cr)
+
+            // ③ 低对比边框：比主题 outline 更淡，聚焦时向品牌色渐变
+            //    alpha 由 0.75 过渡到 1，颜色由 outline 过渡到 brand —— 这就是「平滑过渡」
+            val borderColor = androidx.compose.ui.graphics.lerp(outline, brand, focusProgress * 0.85f)
             drawRoundRect(
-                color = colors.surface.colorOutline,
-                cornerRadius = CornerRadius(12f.scaledDp(uiScale).toPx(), 12f.scaledDp(uiScale).toPx()),
+                color = borderColor.copy(alpha = 0.65f + 0.35f * focusProgress),
+                cornerRadius = cr,
                 style = Stroke(width = 1f.scaledDp(uiScale).toPx()),
             )
+
+            // ④ 淡光晕聚焦：聚焦时在框外描一圈很淡的品牌色，偏移 1.5dp 向外扩
+            if (focusProgress > 0.01f) {
+                val glowW = 3f.scaledDp(uiScale).toPx()
+                drawRoundRect(
+                    color = brand.copy(alpha = 0.16f * focusProgress),
+                    cornerRadius = CornerRadius(cr.x + glowW, cr.y + glowW),
+                    topLeft = Offset(-glowW, -glowW),
+                    size = Size(size.width + glowW * 2, size.height + glowW * 2),
+                    style = Stroke(width = glowW),
+                )
+            }
         }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // 充足留白：左右 16dp（原 14dp），密码框右侧给眼睛按钮留 48dp
                 .padding(
-                    start = 14f.scaledDp(uiScale),
-                    end = if (isPassword) 44f.scaledDp(uiScale) else 14f.scaledDp(uiScale),
+                    start = 16f.scaledDp(uiScale),
+                    end = if (isPassword) 48f.scaledDp(uiScale) else 16f.scaledDp(uiScale),
                 ),
             contentAlignment = Alignment.CenterStart,
         ) {
@@ -437,7 +481,7 @@ fun FormField(
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .size(40f.scaledDp(uiScale))
+                    .size(44f.scaledDp(uiScale))
                     // 无 indication → 不产生水波纹
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -647,8 +691,8 @@ private fun WechatQrPanel(
         // 二维码图片区
         Box(
             modifier = Modifier
-                .size(200f.scaledDp(uiScale))
-                .background(colors.surface.colorCard, RoundedCornerShape(14f.scaledDp(uiScale))),
+                .size(400f.scaledDp(uiScale))
+                .background(colors.surface.colorCard, RoundedCornerShape(20f.scaledDp(uiScale))),
             contentAlignment = Alignment.Center,
         ) {
             when (qrState) {
@@ -660,7 +704,7 @@ private fun WechatQrPanel(
                 WechatQrState.READY -> {
                     val matrix = remember(qrUrl) { qrUrl?.let { QrEncoder.encode(it) } }
                     if (matrix != null) {
-                        Canvas(modifier = Modifier.size(180f.scaledDp(uiScale))) {
+                        Canvas(modifier = Modifier.size(380f.scaledDp(uiScale))) {
                             val n = matrix.size
                             val cell = size.width / n
                             for (y in 0 until n) for (x in 0 until n) {
@@ -695,12 +739,15 @@ private fun WechatQrPanel(
         )
 
         Spacer(Modifier.height(12f.scaledDp(uiScale)))
-        // 两个按钮：上下排布（按维护者要求），各占满一行
+        // 两个按钮：上下排布，宽度比二维码**明显窄一截**并居中。
+        // 取 344dp（二维码框 400dp 的 86%）：实测二维码码点约 607px 时，
+        // 按钮约 518px，视觉上能看清「比码窄」，又不至于窄到局促。
+        val buttonWidth = 344f.scaledDp(uiScale)
         PanelButton(
             text = "下载二维码并跳转微信",
             colors = colors,
             enabled = qrState == WechatQrState.READY,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.width(buttonWidth),
             onClick = onDownloadAndOpenWechat,
         )
         Spacer(Modifier.height(10f.scaledDp(uiScale)))
@@ -708,7 +755,7 @@ private fun WechatQrPanel(
             text = "复制链接并跳转微信",
             colors = colors,
             enabled = qrState == WechatQrState.READY,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.width(buttonWidth),
             onClick = onCopyAndOpenWechat,
         )
 
