@@ -1,63 +1,69 @@
 package com.nongyu.appplus.webvpn.logic
 
 /**
- * 「辅助填入账号密码」的纯逻辑（**不碰 Android / WebView**，可纯 JVM 测）。
+ * 「辅助填入学校登录页」的纯逻辑（**不碰 Android / WebView**，可纯 JVM 测）。
  *
- * ## ⚠️ 为什么这件事必须谨慎
+ * ## 选择器来自**真机抓取**，不是猜的
  *
- * 学校登录页是 `/wui/` 的跨域 SPA，App 想往里填字**只能靠 JS 注入**。
- * 而「自动填账密」等价于**把教务密码持久化在手机上**——这是本仓此前刻意避免的事
- * （`docs/specs/网络层.md`、`docs/后端已就绪-前端对接须知.md` 都把学校密码当敏感物）。
- * 维护者 2026-11-18 明确要求做持久保存，因此本类只负责**拼装注入脚本与校验输入**，
- * 真正的加密落盘由 `data/WebVpnCredentialStore`（Keystore + AES/GCM）承担。
+ * 2026-11-19 直接在浏览器打开
+ * `https://webvpn.sicau.edu.cn/login`（302 到 auth 域的 `/wui/` SPA）实测：
  *
- * ## 安全纪律（三条，任何一条失守都会让功能变成漏洞）
+ * | 实测事实 | 值 |
+ * | --- | --- |
+ * | input 的 `name` / `id` | **全部为 null**（`<input>` 上没有任何 name/id） |
+ * | 密码登录 tab 的输入框 | `placeholder` = 「请输入工号/学号」/「请输入密码」/「请输入验证码」 |
+ * | 短信登录 tab 的输入框 | 「请输入手机号」/「请输入验证码」/「输入短信验证码」 |
+ * | 两组表单是否同时存在 | **是**：两个 tab 的 DOM 都在，靠 `offsetParent` 区分可见性 |
+ * | `<form>` 元素个数 | **0**（纯 SPA + 按钮点击提交） |
+ * | 提交按钮 | `button[type=submit]`，文案「登 录」（中间有空格！） |
+ * | 图形验证码 | 页面内 `<img>`，**必须人工看**，无法程序化获取 |
  *
- * 1. **脚本用 JSON 转义插值**：绝不能把用户输入直接拼进 JS 字符串字面量，
- *    否则一个带 `"` 或 `\` 的密码就能跳出字符串执行任意代码。
- *    这里用 [jsStringLiteral] 统一做转义。
- * 2. **只往登录页注入**：调用方（UI）必须先确认当前 URL 仍在学校登录域内。
- * 3. **不读取、不回传任何填进去的值**：脚本只做 `el.value = ...` 与 `dispatchEvent`，
- *    不把页面上的任何内容返回给原生层。
+ * 因此定位**只能**用 `placeholder` + 可见性，`name`/`id` 一律不可用；
+ * 提交**只能**点按钮，`form.submit()` 这条兜底在本站根本不存在。
  *
- * ## 为什么用 `dispatchEvent`
+ * ## ⚠️ 图形验证码是硬阻塞
  *
- * 现代前端框架（Vue / React）的受控输入框不监听 `el.value =` 的赋值，
- * 只认用户输入产生的 `input` / `change` 事件。不补这一步的话，
- * 页面看起来填上了，但点登录时框架状态还是空的 —— 这是自动填最典型的假成功。
+ * 实测点「登 录」但验证码为空时，页面不前进（只多出「忘记密码」链接）。
+ * 也就是说：**密码登录这条路无法全自动** —— 除非把页面显示出来让人填验证码，
+ * 或者走短信登录（用户手机收码）。这正是本弹窗必须保留可见交互的原因，
+ * 也是「完全删掉 WebView」不可行的根本原因。
+ *
+ * ## 安全纪律
+ *
+ * 1. **脚本用 JSON 转义插值**：绝不能把用户输入直接拼进 JS 字符串字面量；
+ * 2. **写值必须走原生 setter**：React 受控组件只认 `HTMLInputElement.prototype`
+ *    上的 `value` setter，直接 `el.value = x` 在 React 里读不到（实测本站是 React SPA）；
+ * 3. **不读取、不回传任何填进去的值**。
  */
 object WebVpnAutofill {
 
-    /** 账号输入框候选（学校 wui 登录页常见 name/id，按优先级）。 */
-    private val USER_SELECTORS = listOf(
-        "input[name='account']",
-        "input[name='username']",
-        "input[name='user']",
-        "input[name='loginName']",
-        "input[id='account']",
-        "input[id='username']",
-        "input[type='text']",
-        "input[type='tel']",
-        "input:not([type])",
-    )
+    /**
+     * 「密码登录」tab 的账号框（实测 placeholder）。
+     *
+     * 注意是「工号/学号」而不是「学号」—— 实测值，不要想当然。
+     */
+    const val PH_ACCOUNT = "请输入工号/学号"
 
-    /** 密码输入框候选。 */
-    private val PASSWORD_SELECTORS = listOf(
-        "input[type='password']",
-        "input[name='password']",
-        "input[id='password']",
-    )
+    /** 「密码登录」tab 的密码框。 */
+    const val PH_PASSWORD = "请输入密码"
+
+    /** 「短信登录」tab 的手机号框。 */
+    const val PH_PHONE = "请输入手机号"
+
+    /** 两个 tab 共用的图形验证码框。 */
+    const val PH_CAPTCHA = "请输入验证码"
+
+    /** 「短信登录」tab 的短信验证码框。 */
+    const val PH_SMS_CODE = "输入短信验证码"
 
     /**
-     * 账号可以是学号或手机号，这里只做「非空 + 长度合理」的宽松校验。
+     * 账号校验：宽松（非空 + 长度合理 + 无控制字符）。
      *
-     * 刻意不限定必须是 9 位学号：学校登录页同时接受学号与手机号，
-     * 在客户端硬编码某一形态会让另一条合法路径被误拒。
+     * 实测该框同时收工号与学号，本地不限定形态。
      */
     fun isAccountValid(raw: String?): Boolean {
         val v = raw?.trim().orEmpty()
         if (v.isEmpty() || v.length > MAX_ACCOUNT) return false
-        // 不允许控制字符（含换行），避免注入到脚本里改变结构
         return v.none { it.code < 0x20 || it.code == 0x7f }
     }
 
@@ -68,147 +74,155 @@ object WebVpnAutofill {
         return v.none { it.code < 0x20 || it.code == 0x7f }
     }
 
-    /** 账号与密码是否都还不足以尝试填充。 */
+    /** 账号与密码是否足以尝试填充。 */
     fun canAutofill(account: String?, password: String?): Boolean =
         isAccountValid(account) && isPasswordValid(password)
 
-    /**
-     * 生成注入脚本：按候选选择器找第一个可见输入框，赋值并派发事件。
-     *
-     * @return 可直接交给 `WebView.evaluateJavascript` 的脚本字符串。
-     */
-    fun buildInjectScript(account: String, password: String): String {
-        val a = jsStringLiteral(account)
-        val p = jsStringLiteral(password)
-        return """
-            (function(){
-              var userSel = ${jsSelectorArray(USER_SELECTORS)};
-              var passSel = ${jsSelectorArray(PASSWORD_SELECTORS)};
-              function pick(sels, exclude){
-                for (var i=0;i<sels.length;i++){
-                  var list = document.querySelectorAll(sels[i]);
-                  for (var j=0;j<list.length;j++){
-                    var el = list[j];
-                    if (!el || el.disabled || el.readOnly) continue;
-                    if (exclude && el === exclude) continue;
-                    var r = el.getBoundingClientRect();
-                    if (r.width <= 0 || r.height <= 0) continue;
-                    return el;
-                  }
-                }
-                return null;
-              }
-              function fill(el, val){
-                if (!el) return false;
-                el.focus();
-                el.value = val;
-                try {
-                  el.dispatchEvent(new Event('input', {bubbles:true}));
-                  el.dispatchEvent(new Event('change', {bubbles:true}));
-                } catch(e) {}
-                return true;
-              }
-              var pwd = pick(passSel, null);
-              var usr = pick(userSel, pwd);
-              var okU = fill(usr, $a);
-              var okP = fill(pwd, $p);
-              return okU && okP;
-            })();
-        """.trimIndent()
+    /** 图形验证码：4–6 位字母数字（平台通用形态，本地只做宽松长度校验）。 */
+    fun isCaptchaValid(raw: String?): Boolean {
+        val v = raw?.trim().orEmpty()
+        return v.length in 1..8 && v.all { it.isLetterOrDigit() }
     }
 
     /**
-     * 生成「填入并**自动提交**」脚本（无界面 WebView 专用）。
+     * 生成「切到密码登录 + 填入 + 可选填验证码 + 提交」脚本。
      *
-     * ## 为什么需要「自动提交」
+     * 流程与真人操作一致（实测路径）：
+     * 1. 点「密码登录」tab（默认停在「短信登录」，不切 tab 就填不到密码框）；
+     * 2. 用 placeholder 找**可见**的账号框 / 密码框（两 tab DOM 同时存在，必须验可见）；
+     * 3. 用原生 setter 写值 + 派发 input/change（React 受控组件才认）；
+     * 4. 有验证码就一并填；没有就不动它（留给用户手填）；
+     * 5. 点可见的 `button[type=submit]` 提交。
      *
-     * 维护者 2026-11-18 要求「不用那个网页展示」：界面只保留原生三态表单，
-     * WebView 改为**不显示**的后台载体，仅用来真实跑完网关登录 SPA（否则拿不到网关票）。
-     * 既然用户看不到页面，就没人替我们点「登录」——必须由脚本填完直接提交。
-     *
-     * ## 提交策略（按可靠性排序，逐个尝试）
-     *
-     * 1. 表单内 / 页面上的 `submit` 按钮（`type=submit`、`[type=button]`、
-     *    文案含「登录 / 登 录 / 立即登录」的元素）→ `.click()`；
-     * 2. 若填到的密码框有 `form`，直接 `form.submit()`；
-     * 3. 兜底：在密码框上派发 `Enter` 键盘事件（多数登录页监听回车提交）。
-     *
-     * 三条都试是因为学校 `/wui/` 登录页的真实 DOM 仓内无一手记录，
-     * 多一条兜底就多一分自动化成功率；失败也不会报错，只是留在当前页。
-     *
-     * @return `(ok, 说明)` 的 JSON 字符串；`ok` 表示至少填到了两个输入框。
+     * @param captcha 图形验证码；为空串时不填该框。
+     * @return 交给 `WebView.evaluateJavascript` 的脚本；返回 JSON `{ok,via,why}`。
      */
-    fun buildFillAndSubmitScript(account: String, password: String): String {
-        val a = jsStringLiteral(account)
+    fun buildSignInScript(account: String, password: String, captcha: String = ""): String {
+        val a = jsStringLiteral(account.trim())
         val p = jsStringLiteral(password)
+        val c = jsStringLiteral(captcha.trim())
         return """
             (function(){
-              var userSel = ${jsSelectorArray(USER_SELECTORS)};
-              var passSel = ${jsSelectorArray(PASSWORD_SELECTORS)};
-              function pick(sels, exclude){
-                for (var i=0;i<sels.length;i++){
-                  var list = document.querySelectorAll(sels[i]);
-                  for (var j=0;j<list.length;j++){
-                    var el = list[j];
-                    if (!el || el.disabled || el.readOnly) continue;
-                    if (exclude && el === exclude) continue;
-                    var r = el.getBoundingClientRect();
-                    if (r.width <= 0 || r.height <= 0) continue;
-                    return el;
-                  }
+              var PH_ACCOUNT = ${jsStringLiteral(PH_ACCOUNT)};
+              var PH_PASSWORD = ${jsStringLiteral(PH_PASSWORD)};
+              var PH_CAPTCHA = ${jsStringLiteral(PH_CAPTCHA)};
+
+              function visible(el){
+                if (!el || el.disabled || el.readOnly) return false;
+                if (!el.offsetParent) return false;
+                var r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              }
+              function byPlaceholder(ph){
+                var list = document.querySelectorAll('input');
+                for (var i=0;i<list.length;i++){
+                  var el = list[i];
+                  if (!visible(el)) continue;
+                  if ((el.placeholder || '').trim() === ph) return el;
                 }
                 return null;
               }
-              function fill(el, val){
+              function visiblePwd(){
+                var list = document.querySelectorAll("input[type='password']");
+                for (var i=0;i<list.length;i++){ if (visible(list[i])) return list[i]; }
+                return null;
+              }
+              // React 受控组件：必须走原型链上的原生 setter，直接赋值不生效
+              function setValue(el, val){
+                try {
+                  var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                  d.set.call(el, val);
+                } catch(e) { el.value = val; }
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+              }
+              function fillByPh(ph, val){
+                var el = byPlaceholder(ph);
                 if (!el) return false;
                 try { el.focus(); } catch(e) {}
-                el.value = val;
-                try {
-                  el.dispatchEvent(new Event('input', {bubbles:true}));
-                  el.dispatchEvent(new Event('change', {bubbles:true}));
-                } catch(e) {}
+                setValue(el, val);
                 return true;
               }
-              var pwd = pick(passSel, null);
-              var usr = pick(userSel, pwd);
-              var okU = fill(usr, $a);
-              var okP = fill(pwd, $p);
-              if (!okP) return JSON.stringify({ok:false,why:'no-password-field'});
-
-              // ① 找提交按钮
-              var btn = document.querySelector("button[type='submit'], input[type='submit']");
-              if (!btn) {
-                var cands = document.querySelectorAll("button, [role='button'], .btn, .login-btn");
-                for (var k=0;k<cands.length;k++){
-                  var t = (cands[k].innerText || cands[k].value || '').replace(/\s/g,'');
-                  if (t.indexOf('登录') >= 0 || t.toLowerCase().indexOf('login') >= 0) { btn = cands[k]; break; }
-                }
-              }
-              if (btn) { try { btn.click(); return JSON.stringify({ok:true,via:'button'}); } catch(e) {} }
-
-              // ② 直接提交表单
-              if (pwd && pwd.form) {
-                try { pwd.form.submit(); return JSON.stringify({ok:true,via:'form'}); } catch(e) {}
-              }
-
-              // ③ 回车兜底
+              // ① 切到「密码登录」tab（已在该 tab 时点它也无害）
               try {
-                var ke = new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true});
-                pwd.dispatchEvent(ke);
-                var ku = new KeyboardEvent('keyup', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true});
-                pwd.dispatchEvent(ku);
-                return JSON.stringify({ok:true,via:'enter'});
-              } catch(e) {
-                return JSON.stringify({ok:true,via:'none'});
+                var links = document.querySelectorAll('a, [role=tab], .nav-link');
+                for (var i=0;i<links.length;i++){
+                  var t = (links[i].innerText || '').replace(/\s/g,'');
+                  if (t === '密码登录' && visible(links[i])) { links[i].click(); break; }
+                }
+              } catch(e) {}
+
+              // ② 填账号 / 密码
+              var okAcc = fillByPh(PH_ACCOUNT, $a);
+              var pwdEl = visiblePwd();
+              var okPwd = false;
+              if (pwdEl) { try { pwdEl.focus(); } catch(e) {} setValue(pwdEl, $p); okPwd = true; }
+              if (!okPwd) okPwd = fillByPh(PH_PASSWORD, $p);
+              if (!okAcc || !okPwd) {
+                return JSON.stringify({ok:false, why:'field-not-found', acc:okAcc, pwd:okPwd});
               }
+
+              // ③ 图形验证码（用户给了才填）
+              var cap = $c;
+              var okCap = false;
+              if (cap) { okCap = fillByPh(PH_CAPTCHA, cap); }
+
+              // ④ 没有图形验证码就不要提交 —— 实测本站验证码为空时按钮点了不前进，
+              //    盲点只会让用户以为「点了没反应」。
+              if (!okCap) {
+                return JSON.stringify({ok:true, via:'filled-only', why:'need-captcha'});
+              }
+
+              // ⑤ 提交：本站**没有 form**，只能点可见的 submit 按钮
+              var btns = document.querySelectorAll("button[type='submit']");
+              for (var k=0;k<btns.length;k++){
+                if (visible(btns[k])) { btns[k].click(); return JSON.stringify({ok:true, via:'button'}); }
+              }
+              return JSON.stringify({ok:true, via:'filled-only', why:'no-submit-button'});
             })();
         """.trimIndent()
     }
 
     /**
-     * 过滤掉页面上残留的密码输入（例如用户点「不同意」或关闭后）。
+     * 探测脚本：报告当前页面处于哪个 tab、有哪些可见输入框。
      *
-     * 只清空**密码**，不动账号：账号不是秘密，清掉反而让用户重输。
+     * 用于真机排查「为什么没填上」——比让用户描述页面可靠得多。
+     */
+    fun buildProbeScript(): String = """
+        (function(){
+          function visible(el){
+            if (!el || !el.offsetParent) return false;
+            var r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }
+          var fields = [];
+          var list = document.querySelectorAll('input');
+          for (var i=0;i<list.length;i++){
+            if (!visible(list[i])) continue;
+            fields.push({type:list[i].type, ph:list[i].placeholder || ''});
+          }
+          var tab = '';
+          var links = document.querySelectorAll('a');
+          for (var j=0;j<links.length;j++){
+            var t = (links[j].innerText||'').replace(/\s/g,'');
+            if ((t==='密码登录'||t==='短信登录') && visible(links[j])) {
+              tab = t + (((links[j].className||'')+'').indexOf('active')>=0 ? '(active)' : '');
+            }
+          }
+          return JSON.stringify({tab:tab, fields:fields});
+        })();
+    """.trimIndent()
+
+    /**
+     * 兼容旧调用：仅填入、不提交（保留给「先填后让用户确认」的场景）。
+     */
+    fun buildInjectScript(account: String, password: String): String =
+        buildSignInScript(account, password, captcha = "")
+
+    /**
+     * 清空密码框（界面上「不同意 / 关闭」后避免密码留在页面里）。
+     *
+     * 只清密码，不动账号。走原生 setter，React 才能感知。
      */
     fun buildClearPasswordScript(): String = """
         (function(){
@@ -216,7 +230,10 @@ object WebVpnAutofill {
           for (var i=0;i<list.length;i++){
             var el = list[i];
             if (!el) continue;
-            el.value = '';
+            try {
+              var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+              d.set.call(el, '');
+            } catch(e) { el.value = ''; }
             try {
               el.dispatchEvent(new Event('input', {bubbles:true}));
               el.dispatchEvent(new Event('change', {bubbles:true}));
@@ -247,7 +264,6 @@ object WebVpnAutofill {
                 '\r' -> sb.append("\\r")
                 '\t' -> sb.append("\\t")
                 '\u0000' -> sb.append("\\0")
-                // JS 的行终止符，未转义会让字面量提前结束
                 '\u2028' -> sb.append("\\u2028")
                 '\u2029' -> sb.append("\\u2029")
                 else -> {
@@ -262,10 +278,6 @@ object WebVpnAutofill {
         sb.append('\'')
         return sb.toString()
     }
-
-    /** 把选择器列表转成 JS 数组字面量（选择器是我们自己写的常量，无需转义用户输入）。 */
-    private fun jsSelectorArray(selectors: List<String>): String =
-        selectors.joinToString(prefix = "[", postfix = "]") { jsStringLiteral(it) }
 
     const val MAX_ACCOUNT: Int = 64
     const val MAX_PASSWORD: Int = 256

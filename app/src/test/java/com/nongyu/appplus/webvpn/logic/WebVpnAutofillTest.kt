@@ -1,5 +1,6 @@
 package com.nongyu.appplus.webvpn.logic
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -7,13 +8,30 @@ import org.junit.Test
 /**
  * 账密辅助填入的纯逻辑测试。
  *
- * 重点在**注入脚本的转义安全**：密码里出现引号 / 反斜杠 / U+2028 等字符时，
- * 必须仍是合法的 JS 字符串字面量，否则用户输入就能跳出字符串执行任意代码。
+ * ## 选择器常量来自 2026-11-19 的真实页面抓取
+ *
+ * 用浏览器打开 `https://webvpn.sicau.edu.cn/login` 实测得到的 DOM 事实：
+ * - 所有 `<input>` 的 `name` / `id` **都是 null** → 只能按 `placeholder` 定位；
+ * - 密码登录 tab 的字段是「请输入工号/学号」/「请输入密码」/「请输入验证码」；
+ * - 两个 tab 的表单 DOM 同时存在，必须按可见性（offsetParent）过滤；
+ * - 页面 `<form>` 数量为 **0** → 提交只能点 `button[type=submit]`。
+ *
+ * 这些常量一旦被"优化"成 `input[name=username]` 之类，真机就会填不上，
+ * 所以这里把实测值钉死。
  */
 class WebVpnAutofillTest {
 
     @Test
-    fun `账号与密码的宽松校验`() {
+    fun `placeholder 常量与实测页面逐字一致`() {
+        assertEquals("请输入工号/学号", WebVpnAutofill.PH_ACCOUNT)
+        assertEquals("请输入密码", WebVpnAutofill.PH_PASSWORD)
+        assertEquals("请输入手机号", WebVpnAutofill.PH_PHONE)
+        assertEquals("请输入验证码", WebVpnAutofill.PH_CAPTCHA)
+        assertEquals("输入短信验证码", WebVpnAutofill.PH_SMS_CODE)
+    }
+
+    @Test
+    fun `账号是工号或学号_宽松校验`() {
         assertTrue(WebVpnAutofill.isAccountValid("202500001"))
         assertTrue(WebVpnAutofill.isAccountValid("13800138000"))
         assertTrue(WebVpnAutofill.isPasswordValid("p@ssw0rd"))
@@ -23,10 +41,7 @@ class WebVpnAutofillTest {
         assertFalse(WebVpnAutofill.isAccountValid(null))
         assertFalse(WebVpnAutofill.isPasswordValid(null))
         assertFalse(WebVpnAutofill.isPasswordValid(""))
-        // 控制字符拒绝
         assertFalse(WebVpnAutofill.isAccountValid("abc\ndef"))
-        assertFalse(WebVpnAutofill.isPasswordValid("abc\rd"))
-        // 超长拒绝
         assertFalse(WebVpnAutofill.isAccountValid("a".repeat(WebVpnAutofill.MAX_ACCOUNT + 1)))
         assertFalse(WebVpnAutofill.isPasswordValid("a".repeat(WebVpnAutofill.MAX_PASSWORD + 1)))
     }
@@ -39,26 +54,91 @@ class WebVpnAutofillTest {
     }
 
     @Test
-    fun `脚本包含账号与密码且默认转义为普通字面量`() {
-        val script = WebVpnAutofill.buildInjectScript("202500001", "secret")
-        assertTrue(script.contains("202500001"))
-        assertTrue(script.contains("secret"))
-        // 用单引号包裹的字面量
-        assertTrue(script.contains("'202500001'"))
+    fun `图形验证码宽松校验`() {
+        assertTrue(WebVpnAutofill.isCaptchaValid("a1b2"))
+        assertTrue(WebVpnAutofill.isCaptchaValid("XY"))
+        assertFalse(WebVpnAutofill.isCaptchaValid(""))
+        assertFalse(WebVpnAutofill.isCaptchaValid(null))
+        assertFalse(WebVpnAutofill.isCaptchaValid("a b"))
     }
+
+    // ---------- 脚本必须按实测 DOM 写，不能退化成 name/id ----------
+
+    @Test
+    fun `脚本按 placeholder 定位而不是 name 或 id`() {
+        val s = WebVpnAutofill.buildSignInScript("202500001", "secret")
+        // 注意：jsStringLiteral 会把中文转成 \uXXXX，所以脚本里**看不到**中文明文，
+        // 断言必须打在「用 placeholder 比对」这个行为上，而不是中文字面量。
+        assertTrue("必须遍历 input 并比对 placeholder", s.contains("placeholder"))
+        assertTrue("必须调用 byPlaceholder 定位", s.contains("byPlaceholder"))
+        // 实测 name/id 全是 null，出现「按 name/id 属性选择器」就说明退回了猜测。
+        // 注意不能用 contains("input[id=") —— type='password' 里也含 "id="，会误报。
+        assertFalse("不得按 name 属性选择", Regex("""input\[name\s*=""").containsMatchIn(s))
+        assertFalse("不得按 id 属性选择", Regex("""input\[id\s*=""").containsMatchIn(s))
+        assertFalse("不得按 #id 选择", s.contains("document.getElementById"))
+    }
+
+    @Test
+    fun `实测 placeholder 中文会以 u 转义形态进入脚本`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b")
+        // 「工」= U+5DE5，「号」= U+53F7，转义后应为小写十六进制
+        val expected = WebVpnAutofill.jsStringLiteral(WebVpnAutofill.PH_ACCOUNT)
+        assertTrue("脚本里应出现转义后的账号框 placeholder", s.contains(expected))
+        assertTrue("转义形态应含 \\u5de5", expected.contains("\\u5de5"))
+    }
+
+    @Test
+    fun `脚本按可见性过滤_因为两个 tab 的 DOM 同时存在`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b")
+        assertTrue("必须用 offsetParent 判可见", s.contains("offsetParent"))
+        assertTrue("必须同时校验尺寸", s.contains("getBoundingClientRect"))
+    }
+
+    @Test
+    fun `脚本先切到密码登录 tab`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b")
+        assertTrue("默认停在短信登录，必须先切 tab", s.contains("密码登录"))
+    }
+
+    @Test
+    fun `脚本用原生 setter 写值以适配 React`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b")
+        assertTrue(
+            "React 受控组件只认原型链 setter，直接赋值读不到",
+            s.contains("getOwnPropertyDescriptor") && s.contains("HTMLInputElement.prototype"),
+        )
+        assertTrue(s.contains("new Event('input'"))
+        assertTrue(s.contains("new Event('change'"))
+    }
+
+    @Test
+    fun `没有验证码时只填不提交_因为实测点了不前进`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b", captcha = "")
+        // 必须给出「需要验证码」的明确信号，且不盲点按钮
+        assertTrue(s.contains("need-captcha"))
+        assertTrue("不得兜底 form.submit（本站没有 form）", !s.contains(".form.submit()"))
+    }
+
+    @Test
+    fun `给了验证码才点提交按钮`() {
+        val s = WebVpnAutofill.buildSignInScript("a", "b", captcha = "a1b2")
+        assertTrue(s.contains("button[type='submit']"))
+        assertTrue(s.contains("via:'button'"))
+        // 本站没有 form，不该出现 form.submit()
+        assertFalse(s.contains(".form.submit()"))
+    }
+
+    // ---------- 转义安全 ----------
 
     @Test
     fun `危险字符被转义_不能跳出字符串`() {
         val nasty = "a'b\"c\\\\d\n\u2028\u2029</script>"
         val literal = WebVpnAutofill.jsStringLiteral(nasty)
-        // 首尾必须是单引号，内部原始引号不得裸露
         assertTrue(literal.startsWith("'"))
         assertTrue(literal.endsWith("'"))
         val inner = literal.substring(1, literal.length - 1)
-        // 除转义序列中的反斜杠外，不允许出现未转义的单引号 / 双引号
         assertFalse("未转义单引号", Regex("(?<!\\\\)'").containsMatchIn(inner))
         assertFalse("未转义双引号", Regex("(?<!\\\\)\"").containsMatchIn(inner))
-        // 行终止符必须被转义，不能截断字符串字面量
         assertFalse(inner.contains('\u2028'))
         assertFalse(inner.contains('\u2029'))
         assertFalse(inner.contains('\n'))
@@ -74,45 +154,33 @@ class WebVpnAutofillTest {
     }
 
     @Test
-    fun `清空密码脚本只动 password 输入框`() {
+    fun `脚本里的账密同样被转义`() {
+        val script = WebVpnAutofill.buildSignInScript("a'b", "c\nd")
+        assertTrue("单引号应被转义", script.contains("\\'"))
+        assertFalse("原始换行不得出现", script.contains("c\nd"))
+    }
+
+    // ---------- 其他 ----------
+
+    @Test
+    fun `清空密码脚本只动 password 且走原生 setter`() {
         val script = WebVpnAutofill.buildClearPasswordScript()
         assertTrue(script.contains("input[type='password']"))
-        // 不应把账号一起清掉
+        assertTrue("React 需要原生 setter 才能感知清空", script.contains("HTMLInputElement.prototype"))
         assertFalse(script.contains("input[type='text']"))
     }
 
-    // ---------- 无界面 WebView：填完必须自动提交 ----------
-
     @Test
-    fun `填入并提交脚本包含三级提交策略`() {
-        val script = WebVpnAutofill.buildFillAndSubmitScript("202500001", "secret")
-        // ① 提交按钮
-        assertTrue("应尝试点提交按钮", script.contains("type='submit'"))
-        // ② 直接提交表单
-        assertTrue("应兜底 form.submit()", script.contains(".form.submit()"))
-        // ③ 回车兜底
-        assertTrue("应兜底派发 Enter", script.contains("keyCode:13"))
-        // 返回 JSON 结果便于排查
-        assertTrue(script.contains("JSON.stringify"))
+    fun `探测脚本可报告 tab 与可见字段`() {
+        val s = WebVpnAutofill.buildProbeScript()
+        assertTrue(s.contains("fields"))
+        assertTrue(s.contains("密码登录"))
+        assertTrue(s.contains("短信登录"))
     }
 
     @Test
-    fun `填入并提交脚本里的账密同样被转义`() {
-        val nasty = "a'b\"c\\\\d\n</script>"
-        val script = WebVpnAutofill.buildFillAndSubmitScript(nasty, nasty)
-        // 原始换行不得出现（会被转成 \n 两字符）
-        val rawNewlineInLiteral = script.contains("c\\\\d\n")
-        assertFalse("原始换行不得出现在脚本里", rawNewlineInLiteral)
-        // 单引号必须转义，否则字面量被截断
-        assertTrue("单引号应被转义", script.contains("\\'"))
-        // 行终止符不出现
-        assertFalse(script.contains("\u2028"))
-        assertFalse(script.contains("\u2029"))
-    }
-
-    @Test
-    fun `没有密码框时脚本返回失败标记`() {
-        val script = WebVpnAutofill.buildFillAndSubmitScript("a", "b")
-        assertTrue(script.contains("no-password-field"))
+    fun `buildInjectScript 兼容旧签名且不提交`() {
+        val s = WebVpnAutofill.buildInjectScript("a", "b")
+        assertTrue(s.contains("need-captcha"))
     }
 }

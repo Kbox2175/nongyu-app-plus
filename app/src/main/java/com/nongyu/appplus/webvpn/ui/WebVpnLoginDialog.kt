@@ -134,6 +134,13 @@ fun WebVpnLoginDialog(
     // 已保存的账号密码：页面加载完后自动注入
     var pendingAutofill by remember(request.nonce) { mutableStateOf(false) }
 
+    // 是否显示页面本身（需要用户看图形验证码时才显示）。
+    //
+    // 2026-11-19 实测：学校登录页是 React SPA、无 <form>，密码登录**必须**填页面内
+    // 那张 <img> 图形验证码；空着点「登 录」页面原地不动。
+    // 所以「完全不显示网页」在这里撞到了硬约束：验证码无法程序化获取。
+    var showCaptchaPanel by remember(request.nonce) { mutableStateOf(false) }
+
     // 首次打开：把已保存的账号密码读进内存（解密在 IO 线程，避免卡首帧）
     LaunchedEffect(request.nonce) {
         val saved = withContext(Dispatchers.IO) { credentialStore.read() }
@@ -199,12 +206,12 @@ fun WebVpnLoginDialog(
         }
     }
 
-    /** 把账号密码注入后台 WebView 并**自动提交**（用户看不到页面，必须自动点登录）。 */
+    /** 把账号密码注入后台 WebView 并**点击登录**（脚本按实测 DOM 定位）。 */
     fun autofillAndSubmit(webView: WebView?) {
         if (webView == null) return
         if (!WebVpnAutofill.canAutofill(account, password)) return
         webView.evaluateJavascript(
-            WebVpnAutofill.buildFillAndSubmitScript(account.trim(), password),
+            WebVpnAutofill.buildSignInScript(account.trim(), password, captcha = ""),
             null,
         )
     }
@@ -293,11 +300,12 @@ fun WebVpnLoginDialog(
             )
             Spacer(Modifier.height(s(10.dp)))
 
-            // ---- 主体：原生三态表单 ----
+            // ---- 主体：原生表单 / 图形验证码区 ----
             //
-            // 维护者 2026-11-18：「不使用那个网页展示」，界面模仿学校统一身份认证登录页，
-            // 由 App 自己的三态表单承载输入。WebView 仍在，但**不可见**（见下），
-            // 只作为真实跑完网关登录 SPA 的载体 —— 否则拿不到 wengine_vpn_ticket。
+            // 2026-11-19 实测学校登录页后修正：**图形验证码是硬阻塞**。
+            // 页面是 React SPA（无 form），密码登录必须填那张页面内 `<img>` 的验证码，
+            // 空着点「登 录」页面原地不动。所以一旦需要验证码，
+            // 必须把 WebView **显示出来**让用户看图填字 —— 这是不可绕过的。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -305,28 +313,43 @@ fun WebVpnLoginDialog(
                     .clip(RoundedCornerShape(s(10.dp)))
                     .background(colors.surface.colorBackground),
             ) {
-                when (uiState.phase) {
-                    WebVpnLoginPhase.DONE -> Unit
-                    else -> SignInForm(
-                        uiScale = uiScale,
-                        account = account,
-                        password = password,
-                        remember = rememberCredential,
-                        phase = uiState.phase,
-                        onAccountChange = { account = it },
-                        onPasswordChange = { password = it },
-                        onRememberChange = { rememberCredential = it },
-                    )                }
+                if (uiState.phase != WebVpnLoginPhase.DONE) {
+                    // 需要验证码时显示页面，否则显示原生表单
+                    if (showCaptchaPanel) {
+                        GatewayWebView(
+                            reloadKey = webViewReloadKey,
+                            probe = probe,
+                            lastFinishedUrl = lastFinishedUrl,
+                            onError = { msg ->
+                                uiState = uiState.copy(
+                                    phase = WebVpnLoginPhase.FAILED,
+                                    errorText = msg,
+                                )
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        SignInForm(
+                            uiScale = uiScale,
+                            account = account,
+                            password = password,
+                            remember = rememberCredential,
+                            phase = uiState.phase,
+                            onAccountChange = { account = it },
+                            onPasswordChange = { password = it },
+                            onRememberChange = { rememberCredential = it },
+                        )
+                    }
+                }
             }
 
-            // ---- 后台 WebView（0 尺寸，不可见）----
+            // ---- 后台 WebView（不可见，仅用于产生网关票与读票）----
             //
-            // 它必须存在且真实加载 https://webvpn.sicau.edu.cn/login：
-            // 网关票只能由「真实跑完网关登录 SPA」产生，后端没有任何「账密换票」接口。
-            // 用户看不到它，交互全在上面的原生表单；表单提交时把账密注入进去并自动提交。
-            if (uiState.phase == WebVpnLoginPhase.LOADING ||
-                uiState.phase == WebVpnLoginPhase.SUBMITTING ||
-                uiState.phase == WebVpnLoginPhase.FAILED
+            // 需要验证码时上面已经把它显示出来了（同一个实例不能声明两次），
+            // 所以这里只在「不显示」的阶段挂一个 0 尺寸载体。
+            if (!showCaptchaPanel &&
+                (uiState.phase == WebVpnLoginPhase.LOADING ||
+                    uiState.phase == WebVpnLoginPhase.SUBMITTING)
             ) {
                 GatewayWebView(
                     reloadKey = webViewReloadKey,
@@ -338,6 +361,7 @@ fun WebVpnLoginDialog(
                             errorText = msg,
                         )
                     },
+                    modifier = Modifier.size(0.dp),
                 )
             }
 
@@ -372,8 +396,10 @@ fun WebVpnLoginDialog(
                 phase = uiState.phase,
                 canSubmit = WebVpnAutofill.canAutofill(account, password),
                 onSubmit = {
-                    // 首帧基线 + 起后台 WebView（若未起）
+                    // 实测：密码登录必须填页面内的图形验证码 → 必须让用户看到页面。
+                    // 先把账号密码记下，显示页面，用户填完验证码后再点「提交登录」。
                     probe.guestTicket = readTicket()
+                    showCaptchaPanel = true
                     uiState = uiState.copy(phase = WebVpnLoginPhase.LOADING, errorText = null)
                     pendingAutofill = true
                 },
@@ -521,13 +547,12 @@ private fun GatewayWebView(
     probe: WebVpnLoginProbe,
     lastFinishedUrl: androidx.compose.runtime.MutableState<String?>,
     onError: (String) -> Unit,
+    modifier: Modifier = Modifier.size(0.dp),
 ) {
     AndroidView(
-        // **0 尺寸**：用户看不到这个页面（维护者 2026-11-18「不用那个网页展示」），
-        // 但它必须真实存在——网关票只能由真实跑完学校登录 SPA 产生。
-        // 用 size(0.dp) 而不是 alpha(0)：后者仍占布局且仍参与绘制，
-        // 前者彻底不占空间，视觉上就等于「没有这个网页」。
-        modifier = Modifier.size(0.dp),
+        // 默认 **0 尺寸**：用户看不到页面。需要用户看图填验证码时，
+        // 调用方传 `Modifier.fillMaxSize()` 把它显示出来（实测验证码无法程序化获取）。
+        modifier = modifier,
         factory = { ctx ->
             CookieManager.getInstance().apply {
                 setAcceptCookie(true)
