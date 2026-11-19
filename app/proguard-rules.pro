@@ -45,4 +45,20 @@
 # 当前网络层 DTO 都无具名 companion，故本节暂不添加具体规则；
 # 一旦新增这类 DTO，必须回来补：
 #   -keep class com.nongyu.appplus.net.model.** { public static ** Companion; }
-
+# ---------------------------------------------------------------------------
+# kotlinx.serialization DTO 保活（2026-11-19 实测补入）
+#
+# 症状：release 包启动后 presence 上报报
+#   IllegalArgumentException: Unable to create converter for class java.lang.Object
+#   for method jg1.a
+# 原因：PresenceApi.report 返回 Response<T>，T 的 serializer 在运行时按泛型反射取得；
+# R8 看不到这个使用点，把某个 @Serializable DTO 连同其 serializer 一起删了。
+# debug 不收缩所以正常 —— 典型「debug 能跑、release 崩」。
+#
+# 规则说明：
+# - 保留 model 包下全部类与成员（DTO 都是数据载体，体积代价很小）；
+# - 保留**无参构造**：AGP 9 的 strictFullModeForKeepRules 下 -keep class A 不再隐含它；
+# - 保留所有 Companion：具名/匿名 companion 里的 serializer() 供反射调用。
+-keep class com.nongyu.appplus.net.model.** { <init>(...); *; }
+-keep class com.nongyu.appplus.net.model.** { public static ** Companion; }
+-keepclassmembers class com.nongyu.appplus.net.model.** { *** serializer(...); }

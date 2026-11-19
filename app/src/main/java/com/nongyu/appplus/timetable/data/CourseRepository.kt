@@ -228,14 +228,19 @@ class CourseRepository(
             is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
         }
 
-        // ②-b 校外侧：票缺失/失效时投递一次登录弹窗（维护者定的唯一触发条件）
+        // ②-a 服务端问题：公共取数账号池没配好，用户无法自救 —— 直接给出可读错误，不弹登录窗。
+        if (miss.isServerFault()) {
+            error("服务器暂时无法代取教务数据，请联系管理员（${miss.code}）")
+        }
+
+        // ②-b 缺票：投递登录弹窗，并**不再发起注定失败的请求**
         //
-        // 后端 2026-11-18（9fc5219）起，cache_miss 在校外形态下带回 webvpn 字段：
-        // status=missing/expired 时带 code，与 /fetch 端点同码。
-        // 只有「票缺失」或「票失效」才弹，ready 与校内形态一律不弹。
+        // 判定口径见 CacheResult.Miss.needsWebVpnLogin()：它同时覆盖后端的两条信号路径
+        // （session=unavailable 与 webvpn.code=missing/expired）。
         //
-        // 投递后**不阻塞**本次刷新：让既有链路继续跑（可能票其实还有效），
-        // 失败的提示由 UI 侧照常给。弹窗成功后用户重新登录，下次刷新即生效。
+        // ⚠️ 2026-11-19 修正：此前这里「投递后继续跑」，理由是「票可能其实还有效」。
+        // 真机证明那是错的 —— 没票时请求必然拿回网关登录页，白跑一次网络
+        // 还会把「缺票」误报成「不是课表页」。现在改为直接短路返回。
         if (miss.needsWebVpnLogin()) {
             val trigger = when (miss.webvpn?.code) {
                 com.nongyu.appplus.net.core.ApiErrorCode.WEBVPN_TICKET_EXPIRED ->
@@ -244,7 +249,12 @@ class CourseRepository(
                 else -> com.nongyu.appplus.webvpn.model.WebVpnTrigger.TICKET_MISSING
             }
             val decision = com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler.request(trigger)
-            android.util.Log.i("CourseRepo", "校外形态票无效（${miss.webvpn?.status}），弹窗调度=$decision")
+            android.util.Log.i(
+                "CourseRepo",
+                "缺票（session=${miss.session} cookies=${miss.cookies.size} " +
+                    "webvpn=${miss.webvpn?.status}），弹窗调度=$decision",
+            )
+            error("需要先登录学校 WebVPN 网关")
         }
 
         if (!miss.hasRecipe()) {

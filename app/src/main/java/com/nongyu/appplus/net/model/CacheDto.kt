@@ -49,6 +49,13 @@ data class CacheGetResponse(
     val needs: String? = null,
     /** 缺入参时仍可用的骨架路径（不带 query），客户端自己拼。 */
     val basePath: String? = null,
+    /**
+     * 本次下发的是哪种地址形态：`direct`（校内直连）/ `vpn`（校外经网关编码）。
+     *
+     * 由后端按请求头 `X-Nongyu-Campus-Network` 决定。客户端用它区分「缺网关票」
+     * 与「缺教务会话」—— 两者该弹的窗口不同。
+     */
+    val mode: String? = null,
     // ---- 2026-11-18（后端 9fc5219）：校外形态明确带回网关票状态 ----
     /**
      * WebVPN 网关票的**本地状态**。只在 `mode=vpn`（校外）时出现。
@@ -72,6 +79,7 @@ data class CacheGetResponse(
             session = session,
             needs = needs,
             basePath = basePath,
+            mode = mode,
             webvpn = webvpn,
         )
 
@@ -185,6 +193,8 @@ sealed class CacheResult {
         val session: String? = null,
         val needs: String? = null,
         val basePath: String? = null,
+        /** 地址形态：`direct`（校内）/ `vpn`（校外经网关）。缺票判定要用它。 */
+        val mode: String? = null,
         val webvpn: WebVpnGateDto? = null,
     ) : CacheResult() {
 
@@ -194,10 +204,47 @@ sealed class CacheResult {
         /**
          * 是否需要弹窗引导用户登录 WebVPN 网关。
          *
-         * 维护者拍板的触发条件：**只有票缺失或失效时才弹**。
-         * 校内形态（无 `webvpn` 字段）一律不弹。
+         * ## ⚠️ 必须同时覆盖两个字段源（后端有两条下发路径）
+         *
+         * | 后端情形 | 信号 | 要弹吗 |
+         * | --- | --- | --- |
+         * | 校外 + 有票 | `session=ok` + `cookies` 非空 | 不弹 |
+         * | 校外 + **没票** | `session=unavailable` + `cookies` 空 | **弹** |
+         * | 校外 + **票过期** | `webvpn.code=webvpn_ticket_expired` | **弹** |
+         * | 课外 + 票缺失 | `webvpn.code=webvpn_ticket_missing` | **弹** |
+         * | 校内（direct） | `session=ok` + 教务 cookie | 不弹 |
+         *
+         * **2026-11-19 修正**：此前只认 `webvpn.code`，漏掉了 `session=unavailable`。
+         * 真机实测（日志 `session=unavailable cookies=0`）证明后端在「没票」时走的是
+         * `session` 字段而非 `webvpn` 字段，导致客户端拿着空 cookie 去请求网关，
+         * 拿回登录页后报「不是课表页」——用户完全不知道是缺票。
+         *
+         * 判定口径：**票不可用**即弹。`session=unavailable` 与 `cookies` 为空
+         * 都表示「没有可用的网关票」，不必区分「从没交过」还是「过期被清」。
          */
-        fun needsWebVpnLogin(): Boolean = webvpn?.needsLogin() == true
+        fun needsWebVpnLogin(): Boolean {
+            // ① 后端明确给了票状态码（缺失 / 过期）—— 一定是 WebVPN 问题
+            if (webvpn?.needsLogin() == true) return true
+            // ② 后端明确说票**可用** —— 以它为准，不再用 session/cookies 反推。
+            //    这条必须先于 ③：`webvpn.status=ready` 表达的就是「本地有张没被判死的票」，
+            //    此时即便 cookies 为空（例如后端改了下发策略），也不该判成缺票。
+            if (webvpn?.isReady() == true) return false
+            // ③ 校外形态（mode=vpn）下会话不可用或没有 cookie，都等于「没有可用的网关票」
+            //    校内形态不在这里判：那说明教务会话没换来，该走「重新登录教务」而非 WebVPN
+            if (mode == MODE_VPN) {
+                if (session == SESSION_UNAVAILABLE) return true
+                if (cookies.isEmpty()) return true
+            }
+            return false
+        }
+
+        /**
+         * 是否是**服务端问题**（不是用户能解决的），UI 应提示「服务器暂时不可用」而不是引导登录。
+         *
+         * 公共类型（通知 / 教室 / 教师那 8 类）由后端的**取数账号池**代取，
+         * 池未配置、无可用账号、换票失败都属于运维问题 —— 让用户去登录网关毫无意义。
+         */
+        fun isServerFault(): Boolean = code in SERVER_FAULT_CODES
 
         /** 后端是否给出了可执行的取数配方（地址 + 方法都有）。 */
         fun hasRecipe(): Boolean =
@@ -216,6 +263,35 @@ sealed class CacheResult {
 
         /** 教务会话是否可用（后端换票成功）。 */
         fun sessionAvailable(): Boolean = session == "ok" && cookies.isNotEmpty()
+
+        companion object {
+            /**
+             * 后端 `sessionStateUnavailable`：校外私有类**没票**时的会话语义。
+             *
+             * 与 `webvpn.status` 的区别：那是「本地票状态」，这是「本次取数所需凭据是否齐备」。
+             * 两者语义重叠但字段不同，判定时必须都看。
+             */
+            const val SESSION_UNAVAILABLE = "unavailable"
+
+            /** 与后端 `jiaowu.AccessVPN` 逐字一致：校外经网关形态。 */
+            const val MODE_VPN = "vpn"
+
+            /** 与后端 `jiaowu.AccessDirect` 逐字一致：校内直连形态。 */
+            const val MODE_DIRECT = "direct"
+
+            /**
+             * 公共取数账号池相关的服务端错误码（后端 `publicCacheMiss`）。
+             *
+             * 这些码表示**运维侧**没配好（池未配置 / 无可用账号 / 换 ST 失败 / 建会话失败），
+             * 用户无论怎么操作都解决不了 —— UI 应提示「服务器暂时不可用，请联系管理员」，
+             * **绝不能**引导用户去登录 WebVPN 网关。
+             */
+            val SERVER_FAULT_CODES = setOf(
+                "fetch_account_unavailable",
+                "fetch_account_st_failed",
+                "fetch_account_cas_failed",
+            )
+        }
     }
 }
 
