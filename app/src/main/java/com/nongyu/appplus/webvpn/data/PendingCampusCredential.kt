@@ -49,16 +49,23 @@ object PendingCampusCredential {
     /** 登录成功后调用：记下这次用的方式与输入。 */
     fun remember(method: LoginMethod, account: String, password: String? = null) {
         val a = account.trim()
-        if (a.isEmpty()) return
+        if (a.isEmpty()) {
+            // 手机号/学号为空时不写；微信扫码本就没有账号，也不写
+            if (method == LoginMethod.CAMPUS_WECHAT) snapshot = null
+            return
+        }
         snapshot = when (method) {
+            // 账密：记住账号 + 密码（弹窗可完整预填）
             LoginMethod.CAMPUS_PASSWORD ->
                 Snapshot(method = method, account = a, password = password.orEmpty().ifEmpty { null })
 
+            // 短信登录：**只记住手机号**，不记任何验证码（验证码是一次性的，记了也没用）
             LoginMethod.CAMPUS_PHONE ->
                 Snapshot(method = method, account = a, password = null)
 
-            // 其他方式（微信扫码 / 平台登录）不产生可复用的学校凭据
-            else -> return
+            // 微信扫码：**什么都不记**（用户明确要求）。
+            // 扫的是别人/公共设备上的码，记住账号既无意义也不安全。
+            else -> null
         }
     }
 

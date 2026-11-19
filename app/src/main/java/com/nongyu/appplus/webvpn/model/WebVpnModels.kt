@@ -82,18 +82,18 @@ enum class WebVpnGateDecision {
     SKIP_ALREADY_ACTIVE,
 }
 
-/** 弹窗内 WebView 登录的阶段。 */
+/** 登录过程的阶段（纯 HTTP 换票，已无 WebView）。 */
 enum class WebVpnLoginPhase {
-    /** 未开始：只显示说明与「同意登录 / 不同意」双按钮。 */
+    /** 未开始：表单可编辑。 */
     IDLE,
 
-    /** WebView 正在加载学校网关登录页。 */
+    /** 正在向学校统一身份认证登录并换网关票。 */
     LOADING,
 
-    /** 已检测到登录态、正在把票提交给后端。 */
+    /** 已拿到网关票，正在提交给后端保管。 */
     SUBMITTING,
 
-    /** 提交失败（网络/后端错误），保留 WebView 供重试。 */
+    /** 失败（网络/后端/票据被拒），保留表单供重试。 */
     FAILED,
 
     /** 提交成功，即将关闭。 */
