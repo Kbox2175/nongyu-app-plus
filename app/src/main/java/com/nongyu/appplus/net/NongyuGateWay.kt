@@ -1,12 +1,15 @@
 package com.nongyu.appplus.net
 
 import com.nongyu.appplus.net.api.IdentityApi
+import com.nongyu.appplus.net.api.PresenceApi
 import com.nongyu.appplus.net.core.ApiCall
 import com.nongyu.appplus.net.core.UrlBuilder
 import com.nongyu.appplus.net.model.HealthzDto
 import com.nongyu.appplus.net.model.LoginDto
 import com.nongyu.appplus.net.model.MailCodeAckDto
 import com.nongyu.appplus.net.model.NetJson
+import com.nongyu.appplus.net.model.PresenceDecideDto
+import com.nongyu.appplus.net.model.PresenceReportDto
 import com.nongyu.appplus.net.model.ProfileDto
 import okhttp3.RequestBody
 import retrofit2.Response
@@ -32,10 +35,16 @@ import retrofit2.Response
  * ## 门面范围（票 #90 口径变更）
  * 原「一期只暴露 3 条公开端点」是骨架期口径。票 #90 起启动校验需要
  * `GET /identity/me`（需 Bearer、非公开端点），故门面随之扩一条 `me()`。
- * 这是后一期的范围调整，不表示 school/presence 域已可调用。
+ *
+ * ## 校内/校外上报（本轮新增）
+ * 维护者要求「启动时判定在校内还是校外」，故追加 `reportPresence()` / `decidePresence()`。
+ * 这两个方法由 [CampusNetworkProbe] 在首帧之后调用，**不接 UI**。
+ * 注意它们属 school 域，但不表示 school/presence 域已整体对外开放 ——
+ * 门面仍只暴露明确列出的这几个方法。
  */
 class NongyuGateWay internal constructor(
     private val identity: IdentityApi,
+    private val presence: PresenceApi,
     private val baseUrl: String,
 ) {
 
@@ -76,6 +85,26 @@ class NongyuGateWay internal constructor(
      */
     suspend fun me(): ApiCall.Outcome<ProfileDto> =
         call("GET", "/identity/me") { identity.me() }
+
+    /**
+     * `POST /school/presence` —— 上报「在校内 / 校外」。
+     *
+     * 需 Bearer。后端**盖服务端时间戳**并保留 5 分钟；超时未更新即视为陈旧，
+     * 判定退回后端配置。`mode` 只接受 `direct` / `vpn`。
+     *
+     * @param body 已序列化好的 `PresenceReportRequest` 请求体
+     */
+    suspend fun reportPresence(body: RequestBody): ApiCall.Outcome<PresenceReportDto> =
+        call("POST", "/school/presence") { presence.report(body) }
+
+    /**
+     * `GET /school/presence` —— 查询后端当前的判定。
+     *
+     * 需 Bearer。返回 `{"mode":"direct"|"vpn","source":"client"|"backend"}`，
+     * `source=client` 表示来自客户端新鲜上报，`backend` 表示无上报或已陈旧回落。
+     */
+    suspend fun decidePresence(): ApiCall.Outcome<PresenceDecideDto> =
+        call("GET", "/school/presence") { presence.decide() }
 
     /**
      * 统一的调用包装。三项集中处理，业务方法里不再重复：

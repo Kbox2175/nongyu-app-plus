@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅 main 源集（release 也生效）：为测试版公网后端单条放行明文。
+
+  ## 为什么需要它
+  测试版 `RELEASE_BASE_URL = http://103.236.88.53:57979/` 是 **HTTP 明文**，
+  而 targetSdk 36 下 Android 默认禁明文 —— 不配这个文件，release 包里每个请求
+  都会被 `CLEARTEXT communication not permitted` 拦掉，连 `/healthz` 都通不了。
+
+  ## 为什么只放行一个 IP，不写 base-config
+  范围最小：只有 `103.236.88.53` 允许明文，其它地址仍按平台默认禁明文。
+  这与 debug 源集那份配置的取向一致（见 `src/debug/res/xml/network_security_config.xml`）。
+
+  ## ⚠️ 这是测试版妥协，不是最终形态
+  正式发布前二选一：
+  1. 后端上 HTTPS，然后**删掉本文件**与 `AndroidManifest.xml` 里的 `networkSecurityConfig`
+     声明（但 debug 源集仍保留自己的那份，两者互不影响）；
+  2. 或把域名/IP 换成一个仍有明文需求的固定测试环境，届时再评估是否保留。
+
+  历史约束：规格 `docs/specs/network.md` 曾定「release 结构性禁明文」，
+  该结论的前提是「生产域名尚未确定且不会用明文」。测试版改用公网 IP 后前提不再成立，
+  故在此显式放开，并保留「只放行单 IP」的最小面。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">103.236.88.53</domain>
+    </domain-config>
+</network-security-config>

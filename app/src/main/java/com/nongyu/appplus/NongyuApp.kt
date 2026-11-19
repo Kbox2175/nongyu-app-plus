@@ -23,6 +23,9 @@ import com.nongyu.appplus.login.model.LoginReveal
 import com.nongyu.appplus.login.session.LoginSessionHolder
 import com.nongyu.appplus.login.ui.LoginCenterScreen
 import com.nongyu.appplus.shell.MainShell
+import com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler
+import com.nongyu.appplus.webvpn.model.WebVpnTrigger
+import com.nongyu.appplus.webvpn.ui.WebVpnDialogHost
 
 /**
  * 应用根组件。
@@ -61,6 +64,14 @@ fun NongyuApp() {
         val from = previousDestination
         val to = state.destination
         previousDestination = to
+
+        // WebVPN 弹窗「登录后生效」：登录中心 → 主界面这一跳投递一次自动调度。
+        // 闸门（WebVpnGate）保证每进程只弹一次、且用户点过「不同意」后不再骚扰；
+        // 冷启动直接落在主界面（from == to）不投递 —— 那时不是「登录后」。
+        // 与转场共用同一个 effect，避免两个 effect 抢 previousDestination 的时序。
+        if (from == LoginDestination.LOGIN_CENTER && to == LoginDestination.MAIN) {
+            WebVpnDialogScheduler.request(WebVpnTrigger.SIGNED_IN)
+        }
 
         if (LoginReveal.shouldPlay(from, to)) {
             // 主动驱动：先归零再推进，保证动画一定启动
@@ -125,6 +136,13 @@ fun NongyuApp() {
                 )
             }
         }
+
+        // ---- WebVPN 登录弹窗（**根节点最顶层**）----
+        //
+        // 必须是根 Box 的最后一个子节点：Compose 同层后声明者绘制在上，
+        // 这样它盖住 MainShell（含设置面板 / 星云球 / 时间条遮罩）与登录中心 / 圆形揭示层。
+        // 观察全局调度器，登录成功后、后端票失效时、设置面板手动入口都可能把它调度起来。
+        WebVpnDialogHost()
     }
 }
 
