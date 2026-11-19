@@ -1,6 +1,7 @@
 package com.nongyu.appplus.webvpn.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,12 +22,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -63,21 +67,25 @@ fun SignInPanel(
     smsCode: String,
     remember: Boolean,
     phase: WebVpnLoginPhase,
+    captchaImage: String? = null,
+    captchaLoading: Boolean = false,
     onModeChange: (WebVpnSignInDefaults.Mode) -> Unit,
     onAccountChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onImageCaptchaChange: (String) -> Unit,
     onSmsCodeChange: (String) -> Unit,
     onRememberChange: (Boolean) -> Unit,
+    onRefreshCaptcha: () -> Unit = {},
+    onSendSms: () -> Unit = {},
 ) {
     val colors = NongyuTheme.colors
-    val editable = phase == WebVpnLoginPhase.IDLE
+    val editable = phase == WebVpnLoginPhase.IDLE || phase == WebVpnLoginPhase.FAILED
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // ---- 方式切换（对应学校页面的两个 tab + 微信扫码）----
@@ -95,13 +103,6 @@ fun SignInPanel(
                 )
             }
         }
-
-        Text(
-            text = "欢迎使用川农e认证",
-            color = colors.surface.colorText,
-            fontSize = (15f * uiScale).sp,
-            fontWeight = FontWeight.Bold,
-        )
 
         when (mode) {
             WebVpnSignInDefaults.Mode.PASSWORD -> {
@@ -123,7 +124,10 @@ fun SignInPanel(
                     value = imageCaptcha,
                     editable = editable,
                     label = "请输入验证码",
+                    dataUri = captchaImage,
+                    loading = captchaLoading,
                     onValueChange = onImageCaptchaChange,
+                    onRefresh = onRefreshCaptcha,
                 )
             }
 
@@ -139,7 +143,10 @@ fun SignInPanel(
                     value = imageCaptcha,
                     editable = editable,
                     label = "请输入验证码",
+                    dataUri = captchaImage,
+                    loading = captchaLoading,
                     onValueChange = onImageCaptchaChange,
+                    onRefresh = onRefreshCaptcha,
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -157,7 +164,7 @@ fun SignInPanel(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .clickable(enabled = editable) { }
+                            .clickable(enabled = editable, onClick = onSendSms)
                             .padding(horizontal = 8.dp, vertical = 6.dp),
                     ) {
                         Text(
@@ -176,7 +183,6 @@ fun SignInPanel(
                     color = colors.surface.colorTextSecondary,
                     fontSize = (12f * uiScale).sp,
                 )
-                // 二维码占位：真实二维码由后台桥接页面渲染，这里只给视觉位
                 Box(
                     modifier = Modifier
                         .size(140.dp)
@@ -186,7 +192,7 @@ fun SignInPanel(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "二维码",
+                        text = "暂未开放",
                         color = colors.surface.colorTextSecondary,
                         fontSize = (11f * uiScale).sp,
                     )
@@ -201,8 +207,20 @@ fun SignInPanel(
                 .padding(vertical = 2.dp),
         ) {
             Text(
-                text = if (remember) "☑ 记住账号密码" else "☐ 记住账号密码",
-                color = if (remember) colors.brand.colorBrand else colors.surface.colorTextSecondary,
+                // 微信扫码什么都不记，所以不显示「记住」开关
+                text = if (mode == WebVpnSignInDefaults.Mode.WECHAT) {
+                    "微信扫码不记录任何账号信息"
+                } else if (mode == WebVpnSignInDefaults.Mode.PHONE) {
+                    if (remember) "☑ 记住手机号" else "☐ 记住手机号"
+                } else {
+                    if (remember) "☑ 记住账号密码" else "☐ 记住账号密码"
+                },
+                color = when {
+                    mode == WebVpnSignInDefaults.Mode.WECHAT ->
+                        colors.surface.colorTextSecondary.copy(alpha = 0.7f)
+                    remember -> colors.brand.colorBrand
+                    else -> colors.surface.colorTextSecondary
+                },
                 fontSize = (12f * uiScale).sp,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -259,9 +277,21 @@ private fun CaptchaField(
     value: String,
     editable: Boolean,
     label: String,
+    dataUri: String? = null,
+    loading: Boolean = false,
     onValueChange: (String) -> Unit,
+    onRefresh: () -> Unit = {},
 ) {
     val colors = NongyuTheme.colors
+    // 把 data:image/png;base64 解成 Bitmap 真正显示（解不出来就显示占位）
+    val bitmap = remember(dataUri) {
+        dataUri?.let { uri ->
+            com.nongyu.appplus.webvpn.data.WebVpnGatewayLogin.decodeCaptcha(uri)
+                ?.let { bytes ->
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+        }
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -279,14 +309,30 @@ private fun CaptchaField(
             modifier = Modifier
                 .size(width = 100.dp, height = 48.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(colors.brand.colorBrandMuted),
+                .background(colors.brand.colorBrandMuted)
+                .clickable(enabled = !loading, onClick = onRefresh),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "验证码",
-                color = colors.surface.colorTextSecondary,
-                fontSize = (12f * uiScale).sp,
-            )
+            when {
+                bitmap != null -> Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "图形验证码",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize().padding(2.dp),
+                )
+
+                loading -> Text(
+                    text = "加载中",
+                    color = colors.surface.colorTextSecondary,
+                    fontSize = (11f * uiScale).sp,
+                )
+
+                else -> Text(
+                    text = "点击刷新",
+                    color = colors.surface.colorTextSecondary,
+                    fontSize = (11f * uiScale).sp,
+                )
+            }
         }
     }
 }

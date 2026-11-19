@@ -48,12 +48,24 @@ class PendingCampusCredentialTest {
     }
 
     @Test
-    fun `微信扫码不产生可复用凭据`() {
+    fun `微信扫码什么都不记`() {
+        // 先存入账密，再用微信扫码登录：应当把之前的一并清空
+        PendingCampusCredential.remember(LoginMethod.CAMPUS_PASSWORD, "202500001", "pwd")
+        PendingCampusCredential.remember(LoginMethod.CAMPUS_WECHAT, "whatever")
+        assertNull("扫码不记任何账号信息", PendingCampusCredential.take())
+    }
+
+    @Test
+    fun `短信登录只记手机号_不记验证码`() {
         PendingCampusCredential.remember(
-            method = LoginMethod.CAMPUS_WECHAT,
-            account = "whatever",
+            method = LoginMethod.CAMPUS_PHONE,
+            account = "13800138000",
+            // 即使误传了密码位，短信方式也必须把它丢掉
+            password = "123456",
         )
-        assertNull("扫码没有账号密码可存", PendingCampusCredential.take())
+        val s = PendingCampusCredential.take()!!
+        assertEquals("13800138000", s.account)
+        assertNull("短信方式不得记住任何验证码/密码", s.password)
     }
 
     @Test

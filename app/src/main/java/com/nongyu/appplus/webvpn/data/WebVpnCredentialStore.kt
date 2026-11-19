@@ -139,6 +139,39 @@ class WebVpnCredentialStore(
         }
     }
 
+    /**
+     * 只保存手机号（短信登录用）。
+     *
+     * 维护者口径：**短信登录只记手机号**，不记任何短信验证码。
+     * 复用同一个存储文件，密码位清空 —— 这样 [read] 返回的 `password` 为空串，
+     * UI 据此知道「这是手机号方式，不是账密」。
+     */
+    fun savePhoneOnly(phone: String) {
+        val p = phone.trim()
+        if (p.isEmpty()) return
+        if (!ensureReady()) {
+            logged("WebVPN 账号存储不可用，手机号未保存", null)
+            return
+        }
+        try {
+            val enc = encrypt(p)
+            runBlocking {
+                context.webVpnCredDataStore.edit { prefs ->
+                    prefs[stringPreferencesKey(KEY_ACCOUNT)] = enc
+                    // 密码位必须清掉：否则会残留上次账密登录的密码
+                    prefs.remove(stringPreferencesKey(KEY_PASSWORD))
+                }
+            }
+            logged("WebVPN 手机号已加密保存", null)
+        } catch (e: GeneralSecurityException) {
+            logged("WebVPN 手机号加密失败，未保存", e)
+        } catch (e: IOException) {
+            logged("WebVPN 手机号写入失败（IO）", e)
+        } catch (e: RuntimeException) {
+            logged("WebVPN 手机号加密失败（运行时）", e)
+        }
+    }
+
     /** 删除已保存的账号密码。 */
     fun clear() {
         if (!ensureReady()) return
