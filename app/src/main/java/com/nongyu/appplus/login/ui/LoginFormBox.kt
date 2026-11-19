@@ -350,8 +350,16 @@ private fun FormTitle(text: String, colors: NongyuColors) {
  * 占位文字在「未聚焦且内容为空」时显示；一旦聚焦或有输入就消失。
  * 底色与描边用矢量绘制（`Canvas`），不依赖 Material 的 TextField 外观。
  */
+/**
+ * 登录页的单个输入框（48dp 圆角描边 + 聚焦/占位态 + 密码眼睛切换）。
+ *
+ * ## 为什么改成 public
+ *
+ * 与 [CaptchaRow] 同理：WebVPN 弹窗要「和统一身份认证登录页一样」，
+ * 只能复用同一份组件，重画一份必然漂移。
+ */
 @Composable
-private fun FormField(
+fun FormField(
     placeholder: String,
     colors: NongyuColors,
     isPassword: Boolean = false,
@@ -552,9 +560,15 @@ private fun LocalCaptchaRow(
 /**
  * 带右侧图形验证码的输入框行。
  * 输入框占位文字同样在内部；右侧是「验证码图」占位（矢量纹理块）。
+ *
+ * ## 为什么改成 public
+ *
+ * WebVPN 登录弹窗要「和学校统一身份认证登录页一样」（维护者 2026-11-18）。
+ * 唯一能保证「一样」的做法是**复用同一份组件**，而不是在 webvpn 包里照着重画一遍
+ * —— 重画的版本一旦主题或尺寸调整就会漂移，两处长得不一样。
  */
 @Composable
-private fun CaptchaRow(
+fun CaptchaRow(
     placeholder: String,
     colors: NongyuColors,
     onValueChange: (String) -> Unit = {},

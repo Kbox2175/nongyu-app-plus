@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
@@ -53,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.nongyu.appplus.design.NongyuTheme
+import com.nongyu.appplus.login.ui.FormField
 import com.nongyu.appplus.webvpn.data.WebVpnCredentialStore
 import com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler
 import com.nongyu.appplus.webvpn.data.WebVpnSessionRepository
@@ -196,22 +199,22 @@ fun WebVpnLoginDialog(
         }
     }
 
-    /** 把账号密码注入当前 WebView 页面（脚本由纯逻辑层拼装并转义）。 */
-    fun autofillInto(webView: WebView?) {
+    /** 把账号密码注入后台 WebView 并**自动提交**（用户看不到页面，必须自动点登录）。 */
+    fun autofillAndSubmit(webView: WebView?) {
         if (webView == null) return
         if (!WebVpnAutofill.canAutofill(account, password)) return
         webView.evaluateJavascript(
-            WebVpnAutofill.buildInjectScript(account.trim(), password),
+            WebVpnAutofill.buildFillAndSubmitScript(account.trim(), password),
             null,
         )
     }
 
-    // 登录页每次加载完成，若有待注入的账号密码就填一次（只填一次，避免反复覆盖用户手改）
+    // 登录页每次加载完成，若有待提交的账号密码就填+提交一次
     LaunchedEffect(lastFinishedUrl.value, pendingAutofill) {
         if (!pendingAutofill) return@LaunchedEffect
         val url = lastFinishedUrl.value ?: return@LaunchedEffect
         if (WebVpnTicket.isStillOnLoginPage(url)) {
-            autofillInto(probe.webView)
+            autofillAndSubmit(probe.webView)
             pendingAutofill = false
         }
     }
@@ -290,31 +293,11 @@ fun WebVpnLoginDialog(
             )
             Spacer(Modifier.height(s(10.dp)))
 
-            // ---- 账号密码辅助填入（仅登录页阶段显示）----
+            // ---- 主体：原生三态表单 ----
             //
-            // 学校登录页是跨域 SPA，App 无法直接控制它的输入框，只能注入脚本。
-            // 这里给用户一个明确的、可撤销的入口；不勾「记住」就绝不留存。
-            if (uiState.phase == WebVpnLoginPhase.LOADING ||
-                uiState.phase == WebVpnLoginPhase.FAILED
-            ) {
-                CredentialAssistBar(
-                    uiScale = uiScale,
-                    account = account,
-                    password = password,
-                    remember = rememberCredential,
-                    onAccountChange = { account = it },
-                    onPasswordChange = { password = it },
-                    onRememberChange = { rememberCredential = it },
-                    onFill = {
-                        autofillInto(probe.webView)
-                        uiState = uiState.copy(errorText = null)
-                    },
-                    canFill = WebVpnAutofill.canAutofill(account, password),
-                )
-                Spacer(Modifier.height(s(8.dp)))
-            }
-
-            // ---- 主体：说明 / WebView ----
+            // 维护者 2026-11-18：「不使用那个网页展示」，界面模仿学校统一身份认证登录页，
+            // 由 App 自己的三态表单承载输入。WebView 仍在，但**不可见**（见下），
+            // 只作为真实跑完网关登录 SPA 的载体 —— 否则拿不到 wengine_vpn_ticket。
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -323,20 +306,39 @@ fun WebVpnLoginDialog(
                     .background(colors.surface.colorBackground),
             ) {
                 when (uiState.phase) {
-                    WebVpnLoginPhase.IDLE -> IdleExplainer(uiScale = uiScale)
                     WebVpnLoginPhase.DONE -> Unit
-                    else -> GatewayWebView(
-                        reloadKey = webViewReloadKey,
-                        probe = probe,
-                        lastFinishedUrl = lastFinishedUrl,
-                        onError = { msg ->
-                            uiState = uiState.copy(
-                                phase = WebVpnLoginPhase.FAILED,
-                                errorText = msg,
-                            )
-                        },
-                    )
-                }
+                    else -> SignInForm(
+                        uiScale = uiScale,
+                        account = account,
+                        password = password,
+                        remember = rememberCredential,
+                        phase = uiState.phase,
+                        onAccountChange = { account = it },
+                        onPasswordChange = { password = it },
+                        onRememberChange = { rememberCredential = it },
+                    )                }
+            }
+
+            // ---- 后台 WebView（0 尺寸，不可见）----
+            //
+            // 它必须存在且真实加载 https://webvpn.sicau.edu.cn/login：
+            // 网关票只能由「真实跑完网关登录 SPA」产生，后端没有任何「账密换票」接口。
+            // 用户看不到它，交互全在上面的原生表单；表单提交时把账密注入进去并自动提交。
+            if (uiState.phase == WebVpnLoginPhase.LOADING ||
+                uiState.phase == WebVpnLoginPhase.SUBMITTING ||
+                uiState.phase == WebVpnLoginPhase.FAILED
+            ) {
+                GatewayWebView(
+                    reloadKey = webViewReloadKey,
+                    probe = probe,
+                    lastFinishedUrl = lastFinishedUrl,
+                    onError = { msg ->
+                        uiState = uiState.copy(
+                            phase = WebVpnLoginPhase.FAILED,
+                            errorText = msg,
+                        )
+                    },
+                )
             }
 
             // ---- 状态行 ----
@@ -358,7 +360,7 @@ fun WebVpnLoginDialog(
             } else if (uiState.phase == WebVpnLoginPhase.LOADING && !uiState.leftLoginPage) {
                 Spacer(Modifier.height(s(6.dp)))
                 Text(
-                    text = "请在页面里完成学校统一身份认证登录",
+                    text = "正在连接学校网关…",
                     color = colors.surface.colorTextSecondary,
                     fontSize = (8f * uiScale).sp,
                 )
@@ -368,26 +370,22 @@ fun WebVpnLoginDialog(
             ActionRow(
                 uiScale = uiScale,
                 phase = uiState.phase,
-                onAgree = {
+                canSubmit = WebVpnAutofill.canAutofill(account, password),
+                onSubmit = {
+                    // 首帧基线 + 起后台 WebView（若未起）
                     probe.guestTicket = readTicket()
                     uiState = uiState.copy(phase = WebVpnLoginPhase.LOADING, errorText = null)
+                    pendingAutofill = true
                 },
                 onDecline = { WebVpnDialogScheduler.decline() },
                 onCancel = { WebVpnDialogScheduler.dismiss() },
-                onConfirmLogin = {
-                    val ticket = readTicket()
-                    if (ticket == null) {
-                        uiState = uiState.copy(
-                            phase = WebVpnLoginPhase.FAILED,
-                            errorText = "尚未检测到网关票据，请在页面里完成登录后重试",
-                        )
-                    } else {
-                        probe.submitted = true
-                        submitTicket(ticket)
-                    }
+                onResubmit = {
+                    pendingAutofill = true
+                    uiState = uiState.copy(errorText = null)
                 },
                 onRetry = {
                     webViewReloadKey++
+                    pendingAutofill = true
                     uiState = uiState.copy(
                         phase = WebVpnLoginPhase.LOADING,
                         errorText = null,
@@ -399,156 +397,77 @@ fun WebVpnLoginDialog(
 }
 
 /**
- * 账号密码辅助栏：两个输入框 + 「记住」勾选 + 「填入页面」按钮。
+ * 弹窗主体：**模仿学校统一身份认证登录页**的表单。
  *
- * ## 为什么不直接把密码填进 WebView 的表单
+ * 维护者 2026-11-18：「能不能做成和登录页一样的？」——所以这里直接复用登录中心
+ * 的 [FormField] 组件，不另画一套，主题/尺寸调整时天然同步。
  *
- * 我们能控制的只有原生输入框；学校页面的输入框在跨域 SPA 里，只能靠
- * `WebView.evaluateJavascript` 注入。所以这里的定位是**代填助手**：
- * 用户在这里输入（或复用已保存的），点一下填进页面，再由用户自己在页面点登录。
- * 这样任何时刻用户都能看到、改掉、清掉要提交的内容，而不是黑盒。
+ * ## 为什么不出图形验证码
  *
- * ## 密码框
- *
- * 用 `PasswordVisualTransformation` 遮显；不提供「显示密码」以免肩窥。
+ * 学校统一身份认证的图形验证码必须是**网关会话里那一张**（一次性、绑 uuid），
+ * 由后台 WebView 里的页面自己取用；原生侧再画一张不仅无意义，还会误导用户去填。
  */
 @Composable
-private fun CredentialAssistBar(
+private fun SignInForm(
     uiScale: Float,
     account: String,
     password: String,
     remember: Boolean,
+    phase: WebVpnLoginPhase,
     onAccountChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onRememberChange: (Boolean) -> Unit,
-    onFill: () -> Unit,
-    canFill: Boolean,
 ) {
     val colors = NongyuTheme.colors
-    fun s(dp: Dp): Dp = (dp.value * uiScale).dp
+    val editable = phase == WebVpnLoginPhase.IDLE
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(s(10.dp)))
-            .background(colors.surface.colorBackground)
-            .padding(s(10.dp)),
-        verticalArrangement = Arrangement.spacedBy(s(6.dp)),
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+        Text(
+            text = "统一身份认证",
+            color = colors.surface.colorText,
+            fontSize = (15f * uiScale).sp,
+            fontWeight = FontWeight.Bold,
+        )
+
+        FormField(
+            placeholder = "请输入学号",
+            colors = colors,
+            value = account,
+            onValueChange = { if (editable) onAccountChange(it) },
+        )
+        FormField(
+            placeholder = "请输入密码",
+            colors = colors,
+            isPassword = true,
+            value = password,
+            onValueChange = { if (editable) onPasswordChange(it) },
+        )
+
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(enabled = editable) { onRememberChange(!remember) }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
         ) {
             Text(
-                text = "辅助填入",
-                color = colors.surface.colorTextSecondary,
-                fontSize = (8.5f * uiScale).sp,
+                text = if (remember) "☑ 记住账号密码" else "☐ 记住账号密码",
+                color = if (remember) colors.brand.colorBrand else colors.surface.colorTextSecondary,
+                fontSize = (12f * uiScale).sp,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            DecideChip(
-                label = if (remember) "☑ 记住" else "☐ 记住",
-                uiScale = uiScale,
-                active = remember,
-                onClick = { onRememberChange(!remember) },
             )
         }
 
-        AssistField(
-            uiScale = uiScale,
-            value = account,
-            placeholder = "学号 / 手机号",
-            isPassword = false,
-            onValueChange = onAccountChange,
-        )
-        AssistField(
-            uiScale = uiScale,
-            value = password,
-            placeholder = "密码",
-            isPassword = true,
-            onValueChange = onPasswordChange,
-        )
-
-        CardButton(
-            label = "填入登录页面",
-            uiScale = uiScale,
-            modifier = Modifier.fillMaxWidth(),
-            primary = canFill,
-            onClick = onFill,
-            enabled = canFill,
-        )
-    }
-}
-
-@Composable
-private fun AssistField(
-    uiScale: Float,
-    value: String,
-    placeholder: String,
-    isPassword: Boolean,
-    onValueChange: (String) -> Unit,
-) {
-    val colors = NongyuTheme.colors
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape((7f * uiScale).dp))
-            .background(colors.surface.colorCard)
-            .padding(horizontal = (8f * uiScale).dp, vertical = (6f * uiScale).dp),
-    ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            singleLine = true,
-            textStyle = TextStyle(
-                color = colors.surface.colorText,
-                fontSize = (9.5f * uiScale).sp,
-            ),
-            visualTransformation = if (isPassword) {
-                PasswordVisualTransformation()
-            } else {
-                VisualTransformation.None
-            },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (isPassword) KeyboardType.Password else KeyboardType.Text,
-            ),
-            decorationBox = { inner ->
-                if (value.isEmpty()) {
-                    Text(
-                        text = placeholder,
-                        color = colors.surface.colorTextSecondary.copy(alpha = 0.6f),
-                        fontSize = (9.5f * uiScale).sp,
-                    )
-                }
-                inner()
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
-@Composable
-private fun DecideChip(
-    label: String,
-    uiScale: Float,
-    active: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = NongyuTheme.colors
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape((7f * uiScale).dp))
-            .background(
-                if (active) colors.brand.colorBrandMuted else colors.surface.colorCard,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = (8f * uiScale).dp, vertical = (4f * uiScale).dp),
-    ) {
         Text(
-            text = label,
-            color = if (active) colors.brand.colorBrand else colors.surface.colorTextSecondary,
-            fontSize = (8f * uiScale).sp,
-            fontWeight = FontWeight.Bold,
+            text = "登录后农屿会自动连接学校网关，用于校外读取课表。密码仅加密保存在本机。",
+            color = colors.surface.colorTextSecondary.copy(alpha = 0.75f),
+            fontSize = (10f * uiScale).sp,
+            lineHeight = (14f * uiScale).sp,
         )
     }
 }
@@ -587,27 +506,6 @@ private fun CloseCrossButton(uiScale: Float, onClick: () -> Unit) {
     }
 }
 
-/** 未同意前的说明区（纯文字，不加载任何页面 —— 不碰网络直到用户明确同意）。 */@Composable
-private fun IdleExplainer(uiScale: Float) {
-    val colors = NongyuTheme.colors
-    fun s(dp: Dp): Dp = (dp.value * uiScale).dp
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(s(12.dp)),
-        verticalArrangement = Arrangement.spacedBy(s(7.dp)),
-    ) {
-        for (line in EXPLAINER_LINES) {
-            Text(
-                text = line,
-                color = colors.surface.colorTextSecondary.copy(alpha = 0.9f),
-                fontSize = (8.5f * uiScale).sp,
-                lineHeight = (12f * uiScale).sp,
-            )
-        }
-    }
-}
-
 /**
  * 承载学校网关登录页的 WebView。
  *
@@ -625,7 +523,11 @@ private fun GatewayWebView(
     onError: (String) -> Unit,
 ) {
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        // **0 尺寸**：用户看不到这个页面（维护者 2026-11-18「不用那个网页展示」），
+        // 但它必须真实存在——网关票只能由真实跑完学校登录 SPA 产生。
+        // 用 size(0.dp) 而不是 alpha(0)：后者仍占布局且仍参与绘制，
+        // 前者彻底不占空间，视觉上就等于「没有这个网页」。
+        modifier = Modifier.size(0.dp),
         factory = { ctx ->
             CookieManager.getInstance().apply {
                 setAcceptCookie(true)
@@ -688,31 +590,45 @@ private fun GatewayWebView(
     )
 }
 
-/** 底部动作行：按阶段切换，但「不同意 / 取消」始终有出口。 */
+/**
+ * 底部动作行：与真实登录页一样以「登录」为主按钮，随状态切换。
+ *
+ * - `IDLE`：不同意 / **登录**（表单可编辑时）；
+ * - `LOADING`：取消 / 正在登录…（后台 WebView 正在自动提交）；
+ * - `SUBMITTING`：取消 / 提交票据中…；
+ * - `FAILED`：取消 / 重新登录。
+ */
 @Composable
 private fun ActionRow(
     uiScale: Float,
     phase: WebVpnLoginPhase,
-    onAgree: () -> Unit,
+    canSubmit: Boolean,
+    onSubmit: () -> Unit,
     onDecline: () -> Unit,
     onCancel: () -> Unit,
-    onConfirmLogin: () -> Unit,
+    onResubmit: () -> Unit,
     onRetry: () -> Unit,
 ) {
     fun s(dp: Dp): Dp = (dp.value * uiScale).dp
     when (phase) {
         WebVpnLoginPhase.IDLE -> {
             Row(horizontalArrangement = Arrangement.spacedBy(s(8.dp))) {
-                // 全用位置参数：Kotlin 不允许在命名参数之后再出现位置参数。
                 CardButton("不同意", uiScale, Modifier.weight(1f), false, onDecline)
-                CardButton("同意登录", uiScale, Modifier.weight(1f), true, onAgree)
+                CardButton(
+                    "登录",
+                    uiScale,
+                    Modifier.weight(1f),
+                    true,
+                    onSubmit,
+                    enabled = canSubmit,
+                )
             }
         }
 
         WebVpnLoginPhase.LOADING -> {
             Row(horizontalArrangement = Arrangement.spacedBy(s(8.dp))) {
                 CardButton("取消", uiScale, Modifier.weight(1f), false, onCancel)
-                CardButton("我已完成登录", uiScale, Modifier.weight(1f), true, onConfirmLogin)
+                CardButton("正在登录…", uiScale, Modifier.weight(1f), true, {}, enabled = false)
             }
         }
 
@@ -726,7 +642,7 @@ private fun ActionRow(
         WebVpnLoginPhase.FAILED -> {
             Row(horizontalArrangement = Arrangement.spacedBy(s(8.dp))) {
                 CardButton("取消", uiScale, Modifier.weight(1f), false, onCancel)
-                CardButton("重试", uiScale, Modifier.weight(1f), true, onRetry)
+                CardButton("重新登录", uiScale, Modifier.weight(1f), true, onResubmit)
             }
         }
 

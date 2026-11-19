@@ -118,6 +118,94 @@ object WebVpnAutofill {
     }
 
     /**
+     * 生成「填入并**自动提交**」脚本（无界面 WebView 专用）。
+     *
+     * ## 为什么需要「自动提交」
+     *
+     * 维护者 2026-11-18 要求「不用那个网页展示」：界面只保留原生三态表单，
+     * WebView 改为**不显示**的后台载体，仅用来真实跑完网关登录 SPA（否则拿不到网关票）。
+     * 既然用户看不到页面，就没人替我们点「登录」——必须由脚本填完直接提交。
+     *
+     * ## 提交策略（按可靠性排序，逐个尝试）
+     *
+     * 1. 表单内 / 页面上的 `submit` 按钮（`type=submit`、`[type=button]`、
+     *    文案含「登录 / 登 录 / 立即登录」的元素）→ `.click()`；
+     * 2. 若填到的密码框有 `form`，直接 `form.submit()`；
+     * 3. 兜底：在密码框上派发 `Enter` 键盘事件（多数登录页监听回车提交）。
+     *
+     * 三条都试是因为学校 `/wui/` 登录页的真实 DOM 仓内无一手记录，
+     * 多一条兜底就多一分自动化成功率；失败也不会报错，只是留在当前页。
+     *
+     * @return `(ok, 说明)` 的 JSON 字符串；`ok` 表示至少填到了两个输入框。
+     */
+    fun buildFillAndSubmitScript(account: String, password: String): String {
+        val a = jsStringLiteral(account)
+        val p = jsStringLiteral(password)
+        return """
+            (function(){
+              var userSel = ${jsSelectorArray(USER_SELECTORS)};
+              var passSel = ${jsSelectorArray(PASSWORD_SELECTORS)};
+              function pick(sels, exclude){
+                for (var i=0;i<sels.length;i++){
+                  var list = document.querySelectorAll(sels[i]);
+                  for (var j=0;j<list.length;j++){
+                    var el = list[j];
+                    if (!el || el.disabled || el.readOnly) continue;
+                    if (exclude && el === exclude) continue;
+                    var r = el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) continue;
+                    return el;
+                  }
+                }
+                return null;
+              }
+              function fill(el, val){
+                if (!el) return false;
+                try { el.focus(); } catch(e) {}
+                el.value = val;
+                try {
+                  el.dispatchEvent(new Event('input', {bubbles:true}));
+                  el.dispatchEvent(new Event('change', {bubbles:true}));
+                } catch(e) {}
+                return true;
+              }
+              var pwd = pick(passSel, null);
+              var usr = pick(userSel, pwd);
+              var okU = fill(usr, $a);
+              var okP = fill(pwd, $p);
+              if (!okP) return JSON.stringify({ok:false,why:'no-password-field'});
+
+              // ① 找提交按钮
+              var btn = document.querySelector("button[type='submit'], input[type='submit']");
+              if (!btn) {
+                var cands = document.querySelectorAll("button, [role='button'], .btn, .login-btn");
+                for (var k=0;k<cands.length;k++){
+                  var t = (cands[k].innerText || cands[k].value || '').replace(/\s/g,'');
+                  if (t.indexOf('登录') >= 0 || t.toLowerCase().indexOf('login') >= 0) { btn = cands[k]; break; }
+                }
+              }
+              if (btn) { try { btn.click(); return JSON.stringify({ok:true,via:'button'}); } catch(e) {} }
+
+              // ② 直接提交表单
+              if (pwd && pwd.form) {
+                try { pwd.form.submit(); return JSON.stringify({ok:true,via:'form'}); } catch(e) {}
+              }
+
+              // ③ 回车兜底
+              try {
+                var ke = new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true});
+                pwd.dispatchEvent(ke);
+                var ku = new KeyboardEvent('keyup', {key:'Enter', code:'Enter', keyCode:13, which:13, bubbles:true});
+                pwd.dispatchEvent(ku);
+                return JSON.stringify({ok:true,via:'enter'});
+              } catch(e) {
+                return JSON.stringify({ok:true,via:'none'});
+              }
+            })();
+        """.trimIndent()
+    }
+
+    /**
      * 过滤掉页面上残留的密码输入（例如用户点「不同意」或关闭后）。
      *
      * 只清空**密码**，不动账号：账号不是秘密，清掉反而让用户重输。

@@ -80,4 +80,39 @@ class WebVpnAutofillTest {
         // 不应把账号一起清掉
         assertFalse(script.contains("input[type='text']"))
     }
+
+    // ---------- 无界面 WebView：填完必须自动提交 ----------
+
+    @Test
+    fun `填入并提交脚本包含三级提交策略`() {
+        val script = WebVpnAutofill.buildFillAndSubmitScript("202500001", "secret")
+        // ① 提交按钮
+        assertTrue("应尝试点提交按钮", script.contains("type='submit'"))
+        // ② 直接提交表单
+        assertTrue("应兜底 form.submit()", script.contains(".form.submit()"))
+        // ③ 回车兜底
+        assertTrue("应兜底派发 Enter", script.contains("keyCode:13"))
+        // 返回 JSON 结果便于排查
+        assertTrue(script.contains("JSON.stringify"))
+    }
+
+    @Test
+    fun `填入并提交脚本里的账密同样被转义`() {
+        val nasty = "a'b\"c\\\\d\n</script>"
+        val script = WebVpnAutofill.buildFillAndSubmitScript(nasty, nasty)
+        // 原始换行不得出现（会被转成 \n 两字符）
+        val rawNewlineInLiteral = script.contains("c\\\\d\n")
+        assertFalse("原始换行不得出现在脚本里", rawNewlineInLiteral)
+        // 单引号必须转义，否则字面量被截断
+        assertTrue("单引号应被转义", script.contains("\\'"))
+        // 行终止符不出现
+        assertFalse(script.contains("\u2028"))
+        assertFalse(script.contains("\u2029"))
+    }
+
+    @Test
+    fun `没有密码框时脚本返回失败标记`() {
+        val script = WebVpnAutofill.buildFillAndSubmitScript("a", "b")
+        assertTrue(script.contains("no-password-field"))
+    }
 }
