@@ -8,8 +8,10 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.nongyu.appplus.login.session.LoginSessionHolder
 import com.nongyu.appplus.login.session.SessionStartupVerifier
 import com.nongyu.appplus.login.model.VerificationResult
+import com.nongyu.appplus.net.CampusNetworkProbe
 import com.nongyu.appplus.net.NetHolder
 import com.nongyu.appplus.net.NetStartupProbe
+import com.nongyu.appplus.webvpn.data.WebVpnErrorDispatcher
 import com.nongyu.appplus.skin.FileSkinSource
 import com.nongyu.appplus.NongyuApp
 import com.nongyu.appplus.design.NongyuAppPlusTheme
@@ -68,6 +70,11 @@ class MainActivity : ComponentActivity() {
         // 同一 SessionStore 实例由 NetHolder 持有，供 token 来源 / 失效分流 / 校验复用。
         LoginSessionHolder.initialize(NetHolder.sessionStore(applicationContext))
 
+        // WebVPN：后端票缺失/失效（409/401）时驱动顶层登录弹窗。
+        // 与上面会话失效回调用同一套「UI → net 注入」做法：只存函数引用，
+        // 不装配网络、不发请求（ADR-0006 安全）。判定与闸门都在 webvpn/ 侧。
+        NetHolder.setOnWebVpnTicketRequired(WebVpnErrorDispatcher::dispatch)
+
         setContent {
             NongyuAppPlusTheme(
                 colors = resolution.palette(),
@@ -91,6 +98,14 @@ class MainActivity : ComponentActivity() {
         // 票 #90：首帧之后打一次 GET /identity/me 做事后纠正（同样不延长开屏）。
         // 401 会话结束 → 走既有失效分流清凭证并切回登录中心；其余乐观放行、零提示。
         SessionStartupVerifier.schedule(owner = this, context = applicationContext)
+
+        // 校内 / 校外判定：首帧之后探测一次教务域名可达性，并把结果上报 POST /school/presence。
+        // 同时注册网络变化监听，覆盖「走进校园 / 切换 Wi-Fi」等场景。
+        //
+        // 为什么安全：schedule() 内部 Choreographer 等首帧 → 后台线程探测；
+        // 探测失败保持 Unknown（不发 X-Nongyu-Campus-Network 头，后端用默认值），
+        // 任何异常只记日志，绝不影响首帧去向或可用性（ADR-0006）。
+        CampusNetworkProbe.schedule(owner = this, context = applicationContext)
 
         // 票 #53 的皮肤自动更新**已按维护者要求移除**（2026-11-16）：
         // 冷启动不再自动拉皮肤目录，改为手动触发

@@ -10,11 +10,8 @@ import com.nongyu.appplus.net.model.CourseItem
 import com.nongyu.appplus.timetable.logic.CourseHtmlParser
 import com.nongyu.appplus.timetable.logic.CourseScheduleParser
 import com.nongyu.appplus.timetable.model.CourseEntry
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -87,7 +84,11 @@ class CourseRepository(
      * `200 {"code":"cache_miss","message":"...","address":"https://webvpn..."}`
      * —— **地址就在这个响应里**，不需要另外请求 `/school/address`。
      *
-     * 这个地址已经过 WebVPN 改写并带上票据，客户端直接 GET 它就是教务课表页。
+     * ⚠️ **修正（2026-11-18）**：此前这里写「地址已过 WebVPN 改写并带上票据」是**错的**。
+     * 后端实际行为按 `X-Nongyu-Campus-Network` 分两种：
+     * - 校内（`direct`）：直连教务 URL，**cookies 有值**（后端用保管的 tgt 换出 `ASPSESSIONID`）
+     * - 校外（`vpn`）：WebVPN 编码地址，**cookies 恒为空** —— 网关票只能由客户端
+     *   自己登录网关产生，后端换不到。票的本地状态在 `webvpn` 字段里（见下）。
      */
     suspend fun loadOrMiss(): Result<Loaded> = runCatching {
         val api = NetHolder.cache(context)
@@ -126,6 +127,30 @@ class CourseRepository(
      *
      * 这样只有第一次（或清缓存后首次）需要网络，之后都走本地。
      */
+    /**
+     * 读课表 —— 三级回落，正常路径**一次网络都不用**。
+     *
+     * ## 完整链路（维护者 2026-11-17 / 11-19 定的策略）
+     *
+     * ```
+     * ① 本地有 → 直接解析返回（0 次网络）
+     * ② 本地空 → GET 后端缓存
+     *      命中 → 写本地，返回（1 次网络）
+     *    cache_miss → **自动照配方抓取教务 → 回传后端 → 写本地 → 返回**
+     *                  （用户不需要手动点「更新课表」）
+     * ```
+     *
+     * ## 为什么 cache_miss 要自动抓
+     *
+     * 维护者 2026-11-19：「cache_miss 后应该去拿课表并缓存后端呀」。
+     * 之前这里遇到 miss 直接报「课表缓存为空，请先更新课表」——
+     * 那等于把「后端冷启动」这种正常情况甩给用户手动解决。现在自动完成。
+     *
+     * ## 为什么不在这里 DELETE
+     *
+     * miss 已经说明后端没有缓存，DELETE 无意义；且 DELETE 有 60 秒间隔，
+     * 会因为别人刚刷新过而导致「首次自动恢复」失败。DELETE 只在用户主动刷新时做。
+     */
     suspend fun load(): Result<CourseScheduleParser.ParseOutcome> {
         // ① 本地有 → 直接解析返回，不发任何请求
         val cached = cache.load()
@@ -133,14 +158,21 @@ class CourseRepository(
             return Result.success(CourseScheduleParser.parse(cached))
         }
 
-        // ② 本地为空 → 联网读后端缓存，成功后写回本地
+        // ②③ 本地空 → 读后端缓存；miss 就自动抓取（抓取内部会回传并写本地）
         return loadOrMiss().mapCatching { loaded ->
             when (loaded) {
                 is Loaded.Hit -> {
                     loaded.rawItems?.let { cache.save(it) }
                     loaded.outcome
                 }
-                is Loaded.Miss -> error("课表缓存为空，请先更新课表")
+
+                is Loaded.Miss -> {
+                    // 后端没缓存 → 照配方抓教务、回传后端、写本地
+                    android.util.Log.i("CourseRepo", "后端无缓存（${loaded.miss.code}），自动抓取课表")
+                    fetchAndSubmit(loaded.miss)
+                    // 抓取已写入本地缓存，直接读出来解析，保证与下次冷启动完全一致
+                    CourseScheduleParser.parse(cache.load())
+                }
             }
         }
     }
@@ -207,25 +239,52 @@ class CourseRepository(
      * @return 成功时带解析出的课程条数
      * @throws TooFrequentException 60 秒内重复更新
      */
-    suspend fun refreshFromJiaowu(): Result<Int> = runCatching {
-        val api = NetHolder.cache(context)
+    /**
+     * 照后端下发的取数配方**抓取并回传**课表，然后写入本地缓存。
+     *
+     * 这是「拿到数据」的唯一实现，两个入口共用：
+     * - [load]：cache_miss 时**自动**调用（首次使用 / 缓存被清后自己恢复）
+     * - [refreshFromJiaowu]：用户主动点「更新课表」
+     *
+     * ## 为什么这里不 DELETE
+     *
+     * 调用方已经拿到了 [CacheResult.Miss]（后端确认没有缓存），DELETE 无意义，
+     * 而且 DELETE 有 60 秒间隔、过频会 429 —— 放在这里会让「首次自动恢复」
+     * 因为别人刚刷新过而失败。DELETE 只在 [refreshFromJiaowu] 里做。
+     *
+     * @param miss 后端下发的取数配方
+     * @return 解析出的课程条数
+     */
+    private suspend fun fetchAndSubmit(miss: CacheResult.Miss): Int {
+        // ① 服务端问题：公共取数账号池没配好，用户无法自救 —— 给出可读错误，不弹登录窗。
+        if (miss.isServerFault()) {
+            error("服务器暂时无法代取教务数据，请联系管理员（${miss.code}）")
+        }
 
-        // ① 让缓存失效。过频时后端回 429，翻成专用异常给 UI 弹 Toast。
-        val delResp = api.invalidate(CacheDataType.COURSE)
-        if (delResp.code() == 429) {
-            throw TooFrequentException(
-                delResp.headers()["Retry-After"]?.toIntOrNull() ?: 60,
+        // ② 缺票：投递登录弹窗，并**不再发起注定失败的请求**
+        //
+        // 判定口径见 CacheResult.Miss.needsWebVpnLogin()：它同时覆盖后端的两条信号路径
+        // （session=unavailable 与 webvpn.code=missing/expired）。
+        //
+        // ⚠️ 2026-11-19 修正：此前这里「投递后继续跑」，理由是「票可能其实还有效」。
+        // 真机证明那是错的 —— 没票时请求必然拿回网关登录页，白跑一次网络
+        // 还会把「缺票」误报成「不是课表页」。现在改为直接短路返回。
+        if (miss.needsWebVpnLogin()) {
+            val trigger = when (miss.webvpn?.code) {
+                com.nongyu.appplus.net.core.ApiErrorCode.WEBVPN_TICKET_EXPIRED ->
+                    com.nongyu.appplus.webvpn.model.WebVpnTrigger.TICKET_EXPIRED
+
+                else -> com.nongyu.appplus.webvpn.model.WebVpnTrigger.TICKET_MISSING
+            }
+            val decision = com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler.request(trigger)
+            android.util.Log.i(
+                "CourseRepo",
+                "缺票（session=${miss.session} cookies=${miss.cookies.size} " +
+                    "webvpn=${miss.webvpn?.status}），弹窗调度=$decision",
             )
-        }
-        if (!delResp.isSuccessful) {
-            error("使课表缓存失效失败：HTTP ${delResp.code()}")
+            error("需要先登录学校 WebVPN 网关")
         }
 
-        // ② 读缓存（必然未命中），拿到后端下发的配方
-        val miss = when (val loaded = loadOrMiss().getOrThrow()) {
-            is Loaded.Miss -> loaded.miss
-            is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
-        }
         if (!miss.hasRecipe()) {
             error(
                 if (miss.sessionAvailable()) "后端未下发课表取数配方"
@@ -259,29 +318,55 @@ class CourseRepository(
             error("教务课表页里没有解析到课程")
         }
 
-        // ⑤ 回传
-        val payload = buildJsonObject {
-            put("schemaVersion", 1)
-            put("success", true)
-            putJsonArray("payload") {
-                for (item in parsed.items) {
-                    addJsonObject {
-                        item.courseName?.let { put("courseName", it) }
-                        item.courseId?.let { put("courseId", it) }
-                        item.weeks?.let { put("weeks", it) }
-                        item.classroom?.let { put("classroom", it) }
-                        item.scheduleTime?.let { put("scheduleTime", it) }
-                        item.teacher?.let { put("teacher", it) }
-                    }
+        // ⑤ 回传后端，让后端也有这份数据（下次别的设备/清除本地后可直接命中）
+        submit(buildPayload(parsed.items)).getOrThrow()
+
+        // ⑥ 写本地缓存 —— 抓到的数据必须落到手机上，下次进页面就不用联网
+        cache.save(parsed.items)
+
+        return parsed.items.size
+    }
+
+    /** 把解析出的条目拼成后端要求的回传体（形状见 `schema/course.json`）。 */
+    private fun buildPayload(items: List<CourseItem>): String = buildJsonObject {
+        put("schemaVersion", 1)
+        put("success", true)
+        putJsonArray("payload") {
+            for (item in items) {
+                addJsonObject {
+                    item.courseName?.let { put("courseName", it) }
+                    item.courseId?.let { put("courseId", it) }
+                    item.weeks?.let { put("weeks", it) }
+                    item.classroom?.let { put("classroom", it) }
+                    item.scheduleTime?.let { put("scheduleTime", it) }
+                    item.teacher?.let { put("teacher", it) }
                 }
             }
         }
-        submit(payload.toString()).getOrThrow()
+    }.toString()
 
-        // ⑥ 同时写本地缓存 —— 用户主动刷新的结果必须落到手机上，
-        // 否则「更新完还得联网才能看」就荒谬了，也违背本地优先策略。
-        cache.save(parsed.items)
-        parsed.items.size
+    suspend fun refreshFromJiaowu(): Result<Int> = runCatching {
+        val api = NetHolder.cache(context)
+
+        // ① 让缓存失效。过频时后端回 429，翻成专用异常给 UI 弹 Toast。
+        val delResp = api.invalidate(CacheDataType.COURSE)
+        if (delResp.code() == 429) {
+            throw TooFrequentException(
+                delResp.headers()["Retry-After"]?.toIntOrNull() ?: 60,
+            )
+        }
+        if (!delResp.isSuccessful) {
+            error("使课表缓存失效失败：HTTP ${delResp.code()}")
+        }
+
+        // ② 读缓存（必然未命中），拿到后端下发的配方
+        val miss = when (val loaded = loadOrMiss().getOrThrow()) {
+            is Loaded.Miss -> loaded.miss
+            is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
+        }
+
+        // ③ 抓取 + 回传 + 写本地（fetchAndSubmit 内部已完成这三步）
+        fetchAndSubmit(miss)
     }.onFailure {
         android.util.Log.e("CourseRepo", "更新课表失败", it)
     }
@@ -301,43 +386,36 @@ class CourseRepository(
      * 会把「我方后端的 Authorization / X-Nongyu-Signature」一并发给教务，
      * 既无意义也可能触发对方风控。教务会话由配方里的 Cookie 承载。
      */
-    private fun fetchByRecipe(recipe: CacheResult.Miss): String {
-        val url = recipe.address ?: error("配方缺少地址")
-        val method = recipe.method.orEmpty().ifBlank { "GET" }
-
-        // 按配方装 Cookie（名字/值都由后端给，不自己编）
-        val cookieHeader = recipe.cookies
-            .mapNotNull { c ->
-                val n = c.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val v = c.value.orEmpty()
-                "$n=$v"
-            }
-            .joinToString("; ")
-
-        val builder = Request.Builder().url(url)
-        if (cookieHeader.isNotEmpty()) builder.header("Cookie", cookieHeader)
-        // 当前后端只下发 GET；出现别的方式按它执行，不硬编码
-        val req = when (method.uppercase()) {
-            "GET" -> builder.get().build()
-            else -> error("不支持的请求方式：$method")
-        }
-
-        val client = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
-            .build()
-
-        client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) error("拉取教务页面失败：HTTP ${resp.code}")
-            val body = resp.body ?: error("教务响应为空")
-            // 教务页多为 GBK；按 Content-Type 声明的字符集解码，缺省按 GBK
-            val bytes = body.bytes()
-            val contentType = resp.header("Content-Type").orEmpty()
-            val charsetName = Regex("charset=([A-Za-z0-9_\\-]+)")
-                .find(contentType)?.groupValues?.get(1) ?: "GBK"
-            return String(bytes, charset(charsetName))
-        }
-    }
+    /**
+     * 按后端下发的配方发请求，拉回教务 HTML。
+     *
+     * ## 执行逻辑已抽到 [RecipeFetcher]
+     *
+     * 原先本方法自带一份「装 Cookie → 发请求 → 按 charset 解码」的实现。
+     * 15 类回传数据用的是同一个取数模型，抽到 `net/core/RecipeFetcher` 后本类只保留
+     * 「课表特有的部分」（解析器选择、回传、写本地缓存）。
+     *
+     * ## 客户端不自己填任何一项
+     *
+     * 地址、方法、Cookie 全部取自 [CacheResult.Miss]（后端给的）。
+     *
+     * ## 为什么用独立 OkHttp
+     *
+     * 不复用 [NetHolder] 的 client：那个挂了 `AuthInterceptor` 与 `AppSignInterceptor`，
+     * 会把「我方后端的 Authorization / X-Nongyu-Signature」一并发给教务，
+     * 既无意义也可能触发对方风控。教务会话由配方里的 Cookie 承载。
+     *
+     * ⚠️ 同步阻塞，调用方必须已在 IO 线程（见 `refreshFromJiaowu` 的 `withContext`）。
+     */
+    private fun fetchByRecipe(recipe: CacheResult.Miss): String =
+        com.nongyu.appplus.net.core.RecipeFetcher.fetch(
+            address = recipe.address,
+            method = recipe.method,
+            cookies = recipe.cookies.mapNotNull { c ->
+                val name = c.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                com.nongyu.appplus.net.core.RecipeFetcher.CookiePair(name, c.value.orEmpty())
+            },
+        )
 
     /**
      * 更新过于频繁（后端 60 秒失效间隔，`429 refresh_too_soon`）。

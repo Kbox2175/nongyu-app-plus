@@ -4,6 +4,8 @@ import android.content.Context
 import com.nongyu.appplus.net.api.CacheApi
 import com.nongyu.appplus.net.api.SchoolApi
 import com.nongyu.appplus.net.api.IdentityApi
+import com.nongyu.appplus.net.api.PresenceApi
+import com.nongyu.appplus.net.api.WebVpnApi
 import com.nongyu.appplus.net.auth.DefaultSessionInvalidListener
 import com.nongyu.appplus.net.auth.MinimalSessionStore
 import com.nongyu.appplus.net.auth.SessionStore
@@ -115,6 +117,37 @@ object NetHolder {
         return r.create(CacheApi::class.java)
     }
 
+    /**
+     * WebVPN 网关票接口（规格 §3「WebVPN 网关票」）。**独立入口，不并入 [NongyuGateWay]**。
+     *
+     * 与 [cache] / [api] 共享同一个 [Retrofit] / OkHttp 连接池，天然带上 NY1 签名与
+     * Bearer（后端 `requireUserID` 只认中间件身份）。四条路由都由
+     * `webvpn/data/WebVpnSessionRepository` 与未来的代取调用方消费。
+     *
+     * 装配仍是惰性的：本方法只在**首次被调用时**才建 client，而调用方（弹窗提交票）
+     * 只发生在登录 / 用户手动操作之后，不在冷启动路径上 —— 不违反 ADR-0006。
+     */
+    fun webVpn(context: Context): WebVpnApi {
+        val r = retrofitRef ?: synchronized(this) {
+            retrofitRef ?: buildRetrofit(context.applicationContext).also { retrofitRef = it }
+        }
+        return r.create(WebVpnApi::class.java)
+    }
+
+    /**
+     * UI 侧「网关票失效/缺失」回调注入点（WebVPN 登录弹窗）。
+     *
+     * 与 [setOnSessionInvalidUi] 同构：**UI → net 注入**，net 层不 import webvpn。
+     * 生产装配把 `(code, status)` 转交给 `webvpn/logic/WebVpnErrorClassifier`
+     * 判定要不要弹窗，再由 `WebVpnDialogScheduler` 投递请求。
+     */
+    @Volatile
+    private var onWebVpnTicketRequired: ((code: String?, status: Int) -> Unit)? = null
+
+    fun setOnWebVpnTicketRequired(callback: ((code: String?, status: Int) -> Unit)?) {
+        onWebVpnTicketRequired = callback
+    }
+
     /** 仅供测试：注入一个预构造的实例，绕过 Keystore 与网络装配。 */
     internal fun overrideForTest(api: NongyuGateWay?) {
         synchronized(this) { initialized = api }
@@ -127,6 +160,7 @@ object NetHolder {
         val retrofit = buildRetrofit(context).also { retrofitRef = it }
         return NongyuGateWay(
             identity = retrofit.create(IdentityApi::class.java),
+            presence = retrofit.create(PresenceApi::class.java),
             baseUrl = retrofit.baseUrl().toString(),
         )
     }
@@ -151,6 +185,11 @@ object NetHolder {
                 BuildConfig.APP_SIGNING_KEY_ID,
                 BuildConfig.APP_SIGNING_KEY_B64,
             ),
+            // 把 401/409 的码转交 UI 侧判定「要不要弹 WebVPN 登录窗」。
+            // 抓的是注入瞬间的引用：回调本身由 UI 侧常驻单例承载，不会失效。
+            webVpnTicketRequired = { code, status -> onWebVpnTicketRequired?.invoke(code, status) },
+            // 校内/校外判定头：唯一开启点（其它调用点默认 false）。
+            campusNetworkEnabled = true,
         )
 
         // 4) baseUrl 规范化（空串会在这里抛带明确文案的异常，不静默失败）

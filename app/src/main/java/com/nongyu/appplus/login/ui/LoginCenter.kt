@@ -586,7 +586,27 @@ fun LoginCenterScreen(
         // 统一身份认证结果处理（票 #96）：失败口径与平台登录一致
         fun handleCampusResult(result: com.nongyu.appplus.login.session.SchoolLoginResult) {
             when (result) {
-                is com.nongyu.appplus.login.session.SchoolLoginResult.Success -> showHint(null);
+                is com.nongyu.appplus.login.session.SchoolLoginResult.Success -> {
+                    // WebVPN 弹窗的凭据来源：把这次用的方式与输入记进临时 store，
+                    // 弹窗打开时按「手机号取手机号 / 账密取账密 / 取不到用默认」回填。
+                    when (uiState.selectedMethod) {
+                        LoginMethod.CAMPUS_PASSWORD -> com.nongyu.appplus.webvpn.data
+                            .PendingCampusCredential.remember(
+                                method = LoginMethod.CAMPUS_PASSWORD,
+                                account = campusValues["pwStudentNo"].orEmpty(),
+                                password = campusValues["pwPassword"].orEmpty(),
+                            )
+
+                        LoginMethod.CAMPUS_PHONE -> com.nongyu.appplus.webvpn.data
+                            .PendingCampusCredential.remember(
+                                method = LoginMethod.CAMPUS_PHONE,
+                                account = campusValues["smsPhone"].orEmpty(),
+                            )
+
+                        else -> Unit
+                    }
+                    showHint(null)
+                }
                 is com.nongyu.appplus.login.session.SchoolLoginResult.Failure -> {
                     val failure = result.failure
                     if (failure == null) {

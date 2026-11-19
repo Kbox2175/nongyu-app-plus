@@ -80,6 +80,9 @@ class SchoolRealBackendTest {
             Retrofit.Builder().baseUrl(REAL_BACKEND).client(client)
                 .addConverterFactory(NetJson.converterFactory()).build()
                 .create(IdentityApi::class.java),
+            Retrofit.Builder().baseUrl(REAL_BACKEND).client(client)
+                .addConverterFactory(NetJson.converterFactory()).build()
+                .create(PresenceApi::class.java),
             REAL_BACKEND,
         )
     }

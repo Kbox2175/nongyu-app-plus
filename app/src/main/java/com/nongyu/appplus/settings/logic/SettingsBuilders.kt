@@ -30,6 +30,14 @@ object TimetableSettings {
         val ShowWeekends = SettingsEntryKey("timetable.showWeekends")
         val UpdateSchedule = SettingsEntryKey("timetable.updateSchedule")
         val QuietRefresh = SettingsEntryKey("timetable.quietRefresh")
+
+        /**
+         * 「登录 / 刷新学校 WebVPN」动作项（WebVPN 弹窗的**显式手动调度入口**）。
+         *
+         * 放在课程表分区里是因为 WebVPN 票的用途就是课表代取；渲染层按 key 分发，
+         * 面板本身不认识 WebVPN。见 `docs/specs/WebVPN登录弹窗.md` §3。
+         */
+        val WebVpnLogin = SettingsEntryKey("timetable.webVpnLogin")
     }
 
     /**
@@ -71,6 +79,11 @@ object TimetableSettings {
                 key = Keys.UpdateSchedule,
                 title = "更新课表",
                 subtitle = "从教务重新拉取（60 秒内只能一次）",
+            ),
+            SettingsActionEntry(
+                key = Keys.WebVpnLogin,
+                title = "登录 / 刷新 WebVPN",
+                subtitle = "校外访问教务需要连接学校网关",
             ),
         ),
     )

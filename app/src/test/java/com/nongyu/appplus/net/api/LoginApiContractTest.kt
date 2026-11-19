@@ -68,7 +68,11 @@ class LoginApiContractTest {
             .client(client)
             .addConverterFactory(NetJson.converterFactory())
             .build()
-        return NongyuGateWay(retrofit.create(IdentityApi::class.java), baseUrl)
+        return NongyuGateWay(
+            retrofit.create(IdentityApi::class.java),
+            retrofit.create(PresenceApi::class.java),
+            baseUrl,
+        )
     }
 
     /** 平台账密登录的请求体（票 #92 验收判据）。 */

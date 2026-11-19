@@ -52,6 +52,10 @@ object OkHttpFactory {
      *
      * @param loggingEnabled 是否挂日志拦截器。**由装配处按源集决定，不用运行时 `BuildConfig.DEBUG`**：
      *   debug 源集传 `true`，release 源集传 `false`（结构性隔离）。
+     * @param webVpnTicketRequired 可选的「网关票失效/缺失」回调（`(code, status) -> Unit`）。
+     *   **默认 null → 不挂拦截器**：现有 10+ 处测试调用点与「不关心 WebVPN」的装配
+     *   零改动。只有 `NetHolder.buildRetrofit`（生产装配）注入它，把 401/409 的码
+     *   转交给 UI 侧调度弹窗。详见 `WebVpnTicketRequiredInterceptor`。
      */
     fun build(
         tokenProvider: AuthTokenProvider,
@@ -59,6 +63,8 @@ object OkHttpFactory {
         loggingEnabled: Boolean,
         logger: NongyuLogger = NongyuLogger.Noop,
         requestSigner: AppRequestSigner? = null,
+        webVpnTicketRequired: ((code: String?, status: Int) -> Unit)? = null,
+        campusNetworkEnabled: Boolean = false,
     ): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -72,6 +78,17 @@ object OkHttpFactory {
             .addInterceptor(AuthInterceptor(tokenProvider, logger))
         if (requestSigner != null) {
             builder.addInterceptor(AppSignInterceptor(requestSigner))
+        }
+        // 校内/校外判定头：挂在校验层之内。
+        // 默认 false —— 测试与无关调用点行为与改动前逐字一致。
+        // 判定为 Unknown 时拦截器自身不发头（见 CampusNetworkState.headerValue）。
+        if (campusNetworkEnabled) {
+            builder.addInterceptor(CampusNetworkInterceptor())
+        }
+        // WebVPN 票失效转发：最内层（拿到最终响应即可，不需要在鉴权之前）。
+        // 为 null 时完全不装配 —— 测试与无关调用点行为与改动前逐字一致。
+        if (webVpnTicketRequired != null) {
+            builder.addInterceptor(WebVpnTicketRequiredInterceptor(webVpnTicketRequired, logger))
         }
         return builder
             .addInterceptor(SafeLoggingInterceptor(enabled = loggingEnabled, logger = logger))

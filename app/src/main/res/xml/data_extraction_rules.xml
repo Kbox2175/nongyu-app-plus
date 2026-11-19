@@ -15,12 +15,17 @@
   仍写 sharedpref 的话这条排除规则形同不存在。
 
   为什么写字面量而不是 @string/：备份规则 XML 的 path 属性是否解析字符串资源引用
-  未取证（不同 API 上 XmlResourceParser 行为不一致），且资源不存在时会在运行期前暴露。-->
+  未取证（不同 API 上 XmlResourceParser 行为不一致），且资源不存在时会在运行期前暴露。
+
+  WebVPN 学校账号密码（WebVpnCredentialStore）同样两段都排除：它是隐私数据，
+  云端与换机直传都不该带走；且换机后 Keystore Key 不在、必然解不开。-->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="datastore/nongyu_secure_session.preferences_pb" />
+        <exclude domain="file" path="datastore/nongyu_secure_webvpn.preferences_pb" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/nongyu_secure_session.preferences_pb" />
+        <exclude domain="file" path="datastore/nongyu_secure_webvpn.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

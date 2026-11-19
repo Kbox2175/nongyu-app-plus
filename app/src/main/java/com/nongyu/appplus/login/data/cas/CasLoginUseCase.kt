@@ -233,6 +233,100 @@ class CasLoginUseCase(
      * 拿不到合法 tgt 时要明确失败——否则后端会存进一个垃圾值，
      * 表现为「能登录、有画像姓名、其他字段全空」且日志零线索。
      */
+    /**
+     * 手机号 + 短信码登录，**并透出 st 与 userId**（WebVPN 网关换票要用）。
+     *
+     * ## 为什么另开一个方法而不是改 [loginWithPhone]
+     *
+     * [loginWithPhone] 的职责是「换 App 登录用的 go-admin-tgt」，返回值形状被
+     * `SchoolLoginResult` 钉死，改它会牵动登录中心一整条链路。
+     * WebVPN 只需要 `st` + `users[0].id`（拿去请求
+     * `webvpn.sicau.edu.cn/login?cas_login=true&ticket=<st>&userId=<id>`），
+     * 两者诉求不同，所以并列一个新方法，互不影响。
+     *
+     * @return 成功时带 [CasSignInSt]；失败带可读信息
+     */
+    suspend fun loginByPhoneForSt(
+        phone: String,
+        smsCode: String,
+        appId: String = CAS_APPID,
+    ): CasSignInStResult {
+        jar.clear()
+        val body = jsonBody(
+            json.encodeToString(
+                CasPhoneLoginBody.serializer(),
+                CasPhoneLoginBody(smsCode, phone, appId),
+            ),
+        )
+        val envelope = call { api.loginByPhone(body) }
+            ?: return CasSignInStResult.Failure("")
+        if (envelope.code != 200) {
+            return CasSignInStResult.Failure(envelope.msg.orEmpty())
+        }
+        return stFromEnvelope(envelope)
+    }
+
+    /**
+     * 账密登录，**并透出 st 与 userId**（WebVPN 网关换票要用）。
+     *
+     * 与 [loginWithPasswordForSt] 同一套解析；图形验证码必须用调用方传入的
+     * 同一 uuid（一次性，重取即作废）。
+     */
+    suspend fun loginWithPasswordForSt(
+        studentNo: String,
+        password: String,
+        captcha: CasCaptcha,
+        captchaCode: String,
+        appId: String = CAS_APPID,
+    ): CasSignInStResult {
+        jar.clear()
+        val body = jsonBody(
+            json.encodeToString(
+                CasPasswordLoginBody.serializer(),
+                CasPasswordLoginBody(appId, captchaCode, studentNo, password, captcha.uuid),
+            ),
+        )
+        val envelope = call { api.login(body) }
+            ?: return CasSignInStResult.Failure("")
+        if (envelope.code != 200) {
+            return CasSignInStResult.Failure(envelope.msg.orEmpty())
+        }
+        return stFromEnvelope(envelope)
+    }
+
+    /** 从登录响应的加密 `data` 里解出 st 与 userId。 */
+    private fun stFromEnvelope(envelope: CasEnvelope): CasSignInStResult {
+        val plain = CasDecrypt.unwrap(envelope) ?: return CasSignInStResult.Failure(
+            "无法解析统一身份认证返回的登录结果",
+        )
+        val parsed = try {
+            json.decodeFromString(CasQrResult.serializer(), plain)
+        } catch (e: Exception) {
+            return CasSignInStResult.Failure("登录结果格式异常")
+        }
+        // users[0].id 优先，其次 user.id
+        val userId = parsed.users?.firstOrNull()?.id ?: parsed.user?.id
+        val st = parsed.st
+        if (st.isNullOrBlank() || userId == null) {
+            return CasSignInStResult.Failure(
+                "统一身份认证未返回有效票据（st / userId）",
+            )
+        }
+        return CasSignInStResult.Success(
+            st = st,
+            userId = userId.toString(),
+            callbackUrl = parsed.callbackUrl,
+        )
+    }
+
+    /**
+     * 财务/其它调用方用：从 **`Set-Cookie` 头**拿到形态合法的 `go-admin-tgt`。
+     *
+     * 单枚 tgt 就够（权威文档 §1.1：`fetch.go:48` 只设一枚），
+     * 配套 cookie 属"更保险但非必要"，有则一并透传供后端续期。
+     * 拿不到合法 tgt 时要明确失败——否则后端会存进一个垃圾值，
+     * 表现为「能登录、有画像姓名、其他字段全空」且日志零线索。
+     */
     private fun credentialOrFailure(): CasLoginResult {
         val tgt = tgtInterceptor.lastTgt()
         if (tgt == null || !TgtValidator.looksLikeTgt(tgt)) {
