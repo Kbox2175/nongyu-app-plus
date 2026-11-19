@@ -691,7 +691,7 @@ private fun WechatQrPanel(
         // 二维码图片区
         Box(
             modifier = Modifier
-                .size(400f.scaledDp(uiScale))
+                .size(300f.scaledDp(uiScale))
                 .background(colors.surface.colorCard, RoundedCornerShape(20f.scaledDp(uiScale))),
             contentAlignment = Alignment.Center,
         ) {
@@ -704,7 +704,7 @@ private fun WechatQrPanel(
                 WechatQrState.READY -> {
                     val matrix = remember(qrUrl) { qrUrl?.let { QrEncoder.encode(it) } }
                     if (matrix != null) {
-                        Canvas(modifier = Modifier.size(380f.scaledDp(uiScale))) {
+                        Canvas(modifier = Modifier.size(280f.scaledDp(uiScale))) {
                             val n = matrix.size
                             val cell = size.width / n
                             for (y in 0 until n) for (x in 0 until n) {
@@ -740,9 +740,8 @@ private fun WechatQrPanel(
 
         Spacer(Modifier.height(12f.scaledDp(uiScale)))
         // 两个按钮：上下排布，宽度比二维码**明显窄一截**并居中。
-        // 取 344dp（二维码框 400dp 的 86%）：实测二维码码点约 607px 时，
-        // 按钮约 518px，视觉上能看清「比码窄」，又不至于窄到局促。
-        val buttonWidth = 344f.scaledDp(uiScale)
+        // 取 258dp（二维码框 300dp 的 86%）：与二维码放大 0.5 倍后的比例保持一致。
+        val buttonWidth = 258f.scaledDp(uiScale)
         PanelButton(
             text = "下载二维码并跳转微信",
             colors = colors,
