@@ -127,6 +127,30 @@ class CourseRepository(
      *
      * 这样只有第一次（或清缓存后首次）需要网络，之后都走本地。
      */
+    /**
+     * 读课表 —— 三级回落，正常路径**一次网络都不用**。
+     *
+     * ## 完整链路（维护者 2026-11-17 / 11-19 定的策略）
+     *
+     * ```
+     * ① 本地有 → 直接解析返回（0 次网络）
+     * ② 本地空 → GET 后端缓存
+     *      命中 → 写本地，返回（1 次网络）
+     *    cache_miss → **自动照配方抓取教务 → 回传后端 → 写本地 → 返回**
+     *                  （用户不需要手动点「更新课表」）
+     * ```
+     *
+     * ## 为什么 cache_miss 要自动抓
+     *
+     * 维护者 2026-11-19：「cache_miss 后应该去拿课表并缓存后端呀」。
+     * 之前这里遇到 miss 直接报「课表缓存为空，请先更新课表」——
+     * 那等于把「后端冷启动」这种正常情况甩给用户手动解决。现在自动完成。
+     *
+     * ## 为什么不在这里 DELETE
+     *
+     * miss 已经说明后端没有缓存，DELETE 无意义；且 DELETE 有 60 秒间隔，
+     * 会因为别人刚刷新过而导致「首次自动恢复」失败。DELETE 只在用户主动刷新时做。
+     */
     suspend fun load(): Result<CourseScheduleParser.ParseOutcome> {
         // ① 本地有 → 直接解析返回，不发任何请求
         val cached = cache.load()
@@ -134,14 +158,21 @@ class CourseRepository(
             return Result.success(CourseScheduleParser.parse(cached))
         }
 
-        // ② 本地为空 → 联网读后端缓存，成功后写回本地
+        // ②③ 本地空 → 读后端缓存；miss 就自动抓取（抓取内部会回传并写本地）
         return loadOrMiss().mapCatching { loaded ->
             when (loaded) {
                 is Loaded.Hit -> {
                     loaded.rawItems?.let { cache.save(it) }
                     loaded.outcome
                 }
-                is Loaded.Miss -> error("课表缓存为空，请先更新课表")
+
+                is Loaded.Miss -> {
+                    // 后端没缓存 → 照配方抓教务、回传后端、写本地
+                    android.util.Log.i("CourseRepo", "后端无缓存（${loaded.miss.code}），自动抓取课表")
+                    fetchAndSubmit(loaded.miss)
+                    // 抓取已写入本地缓存，直接读出来解析，保证与下次冷启动完全一致
+                    CourseScheduleParser.parse(cache.load())
+                }
             }
         }
     }
@@ -208,32 +239,29 @@ class CourseRepository(
      * @return 成功时带解析出的课程条数
      * @throws TooFrequentException 60 秒内重复更新
      */
-    suspend fun refreshFromJiaowu(): Result<Int> = runCatching {
-        val api = NetHolder.cache(context)
-
-        // ① 让缓存失效。过频时后端回 429，翻成专用异常给 UI 弹 Toast。
-        val delResp = api.invalidate(CacheDataType.COURSE)
-        if (delResp.code() == 429) {
-            throw TooFrequentException(
-                delResp.headers()["Retry-After"]?.toIntOrNull() ?: 60,
-            )
-        }
-        if (!delResp.isSuccessful) {
-            error("使课表缓存失效失败：HTTP ${delResp.code()}")
-        }
-
-        // ② 读缓存（必然未命中），拿到后端下发的配方
-        val miss = when (val loaded = loadOrMiss().getOrThrow()) {
-            is Loaded.Miss -> loaded.miss
-            is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
-        }
-
-        // ②-a 服务端问题：公共取数账号池没配好，用户无法自救 —— 直接给出可读错误，不弹登录窗。
+    /**
+     * 照后端下发的取数配方**抓取并回传**课表，然后写入本地缓存。
+     *
+     * 这是「拿到数据」的唯一实现，两个入口共用：
+     * - [load]：cache_miss 时**自动**调用（首次使用 / 缓存被清后自己恢复）
+     * - [refreshFromJiaowu]：用户主动点「更新课表」
+     *
+     * ## 为什么这里不 DELETE
+     *
+     * 调用方已经拿到了 [CacheResult.Miss]（后端确认没有缓存），DELETE 无意义，
+     * 而且 DELETE 有 60 秒间隔、过频会 429 —— 放在这里会让「首次自动恢复」
+     * 因为别人刚刷新过而失败。DELETE 只在 [refreshFromJiaowu] 里做。
+     *
+     * @param miss 后端下发的取数配方
+     * @return 解析出的课程条数
+     */
+    private suspend fun fetchAndSubmit(miss: CacheResult.Miss): Int {
+        // ① 服务端问题：公共取数账号池没配好，用户无法自救 —— 给出可读错误，不弹登录窗。
         if (miss.isServerFault()) {
             error("服务器暂时无法代取教务数据，请联系管理员（${miss.code}）")
         }
 
-        // ②-b 缺票：投递登录弹窗，并**不再发起注定失败的请求**
+        // ② 缺票：投递登录弹窗，并**不再发起注定失败的请求**
         //
         // 判定口径见 CacheResult.Miss.needsWebVpnLogin()：它同时覆盖后端的两条信号路径
         // （session=unavailable 与 webvpn.code=missing/expired）。
@@ -290,29 +318,55 @@ class CourseRepository(
             error("教务课表页里没有解析到课程")
         }
 
-        // ⑤ 回传
-        val payload = buildJsonObject {
-            put("schemaVersion", 1)
-            put("success", true)
-            putJsonArray("payload") {
-                for (item in parsed.items) {
-                    addJsonObject {
-                        item.courseName?.let { put("courseName", it) }
-                        item.courseId?.let { put("courseId", it) }
-                        item.weeks?.let { put("weeks", it) }
-                        item.classroom?.let { put("classroom", it) }
-                        item.scheduleTime?.let { put("scheduleTime", it) }
-                        item.teacher?.let { put("teacher", it) }
-                    }
+        // ⑤ 回传后端，让后端也有这份数据（下次别的设备/清除本地后可直接命中）
+        submit(buildPayload(parsed.items)).getOrThrow()
+
+        // ⑥ 写本地缓存 —— 抓到的数据必须落到手机上，下次进页面就不用联网
+        cache.save(parsed.items)
+
+        return parsed.items.size
+    }
+
+    /** 把解析出的条目拼成后端要求的回传体（形状见 `schema/course.json`）。 */
+    private fun buildPayload(items: List<CourseItem>): String = buildJsonObject {
+        put("schemaVersion", 1)
+        put("success", true)
+        putJsonArray("payload") {
+            for (item in items) {
+                addJsonObject {
+                    item.courseName?.let { put("courseName", it) }
+                    item.courseId?.let { put("courseId", it) }
+                    item.weeks?.let { put("weeks", it) }
+                    item.classroom?.let { put("classroom", it) }
+                    item.scheduleTime?.let { put("scheduleTime", it) }
+                    item.teacher?.let { put("teacher", it) }
                 }
             }
         }
-        submit(payload.toString()).getOrThrow()
+    }.toString()
 
-        // ⑥ 同时写本地缓存 —— 用户主动刷新的结果必须落到手机上，
-        // 否则「更新完还得联网才能看」就荒谬了，也违背本地优先策略。
-        cache.save(parsed.items)
-        parsed.items.size
+    suspend fun refreshFromJiaowu(): Result<Int> = runCatching {
+        val api = NetHolder.cache(context)
+
+        // ① 让缓存失效。过频时后端回 429，翻成专用异常给 UI 弹 Toast。
+        val delResp = api.invalidate(CacheDataType.COURSE)
+        if (delResp.code() == 429) {
+            throw TooFrequentException(
+                delResp.headers()["Retry-After"]?.toIntOrNull() ?: 60,
+            )
+        }
+        if (!delResp.isSuccessful) {
+            error("使课表缓存失效失败：HTTP ${delResp.code()}")
+        }
+
+        // ② 读缓存（必然未命中），拿到后端下发的配方
+        val miss = when (val loaded = loadOrMiss().getOrThrow()) {
+            is Loaded.Miss -> loaded.miss
+            is Loaded.Hit -> error("缓存未按预期失效，请稍后再试")
+        }
+
+        // ③ 抓取 + 回传 + 写本地（fetchAndSubmit 内部已完成这三步）
+        fetchAndSubmit(miss)
     }.onFailure {
         android.util.Log.e("CourseRepo", "更新课表失败", it)
     }
