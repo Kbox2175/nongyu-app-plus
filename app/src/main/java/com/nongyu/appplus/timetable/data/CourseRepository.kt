@@ -53,9 +53,21 @@ class CourseRepository(
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
 ) {
 
+    /** 本地缓存：课表数据在手机上留一份，日常打开不发网络请求。 */
+    private val cache = CourseCache(context)
+
     /** 读缓存的结果：命中给课程，未命中给**后端下发的取数配方**。 */
     sealed class Loaded {
-        data class Hit(val outcome: CourseScheduleParser.ParseOutcome) : Loaded()
+        /**
+         * 命中。
+         *
+         * @param outcome 解析后的课表
+         * @param rawItems 解析前的原始条目，用于写回本地缓存（避免下次再联网）
+         */
+        data class Hit(
+            val outcome: CourseScheduleParser.ParseOutcome,
+            val rawItems: List<CourseItem>? = null,
+        ) : Loaded()
 
         /**
          * 缓存未命中，带后端的直连取数配方。
@@ -93,23 +105,45 @@ class CourseRepository(
                 val items = arr.mapNotNull { el ->
                     runCatching { json.decodeFromJsonElement(CourseItem.serializer(), el) }.getOrNull()
                 }
-                Loaded.Hit(CourseScheduleParser.parse(items))
+                Loaded.Hit(CourseScheduleParser.parse(items), rawItems = items)
             }
         }
     }
 
     /**
-     * 拉取并映射课程表（只读缓存）。
+     * 读课表 —— **本地优先，本地有就完全不打网络**（维护者 2026-11-17 定的策略）。
      *
-     * 未命中时失败，提示用户点「更新课表」。
+     * ## 什么时候才联网
+     *
+     * 只有两种情况：
+     * 1. 本地为空（首次使用 / 缓存被清 / 结构版本不匹配被丢弃）；
+     * 2. 用户主动点「更新课表」（走 [refreshFromJiaowu]，与这里无关）。
+     *
+     * 也就是说，日常打开课表页面**一次网络请求都不发**。理由：课表一学期基本不变，
+     * 为了可能过期的数据每次冷启动都打网络，换来的只是「地铁里打不开课表」。
+     *
+     * ## 联网拿到数据后写回本地
+     *
+     * 这样只有第一次（或清缓存后首次）需要网络，之后都走本地。
      */
-    suspend fun load(): Result<CourseScheduleParser.ParseOutcome> =
-        loadOrMiss().mapCatching { loaded ->
+    suspend fun load(): Result<CourseScheduleParser.ParseOutcome> {
+        // ① 本地有 → 直接解析返回，不发任何请求
+        val cached = cache.load()
+        if (cached.isNotEmpty()) {
+            return Result.success(CourseScheduleParser.parse(cached))
+        }
+
+        // ② 本地为空 → 联网读后端缓存，成功后写回本地
+        return loadOrMiss().mapCatching { loaded ->
             when (loaded) {
-                is Loaded.Hit -> loaded.outcome
+                is Loaded.Hit -> {
+                    loaded.rawItems?.let { cache.save(it) }
+                    loaded.outcome
+                }
                 is Loaded.Miss -> error("课表缓存为空，请先更新课表")
             }
         }
+    }
 
     /** 便捷：只关心可落格课程。 */
     suspend fun loadEntries(): Result<List<CourseEntry>> =
@@ -243,6 +277,10 @@ class CourseRepository(
             }
         }
         submit(payload.toString()).getOrThrow()
+
+        // ⑥ 同时写本地缓存 —— 用户主动刷新的结果必须落到手机上，
+        // 否则「更新完还得联网才能看」就荒谬了，也违背本地优先策略。
+        cache.save(parsed.items)
         parsed.items.size
     }.onFailure {
         android.util.Log.e("CourseRepo", "更新课表失败", it)
