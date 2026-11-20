@@ -40,6 +40,22 @@ object RecipeFetcher {
     /** 教务页多为 GBK；`Content-Type` 未声明字符集时按它解。 */
     private const val DEFAULT_CHARSET = "GBK"
 
+    /**
+     * 浏览器请求头 —— **逐字照抄后端实测脚本** `tools/_verify/main.go:115`。
+     *
+     * 该脚本 2026-11-19 用这组头直连编码地址拿到 200 / 32848 字节 / 含 table 的真实课表。
+     * 注意是 **Android Chrome UA**；桌面 Chrome UA 与 okhttp 默认 UA 都会让网关
+     * 偶发导向登录页（实测 1856 字节「川农e认证」壳）。**不要改成别的 UA。**
+     */
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
+
+    private const val HTML_ACCEPT =
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+    private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9"
+
     private val charsetRegex = Regex("charset=([A-Za-z0-9_\\-]+)", RegexOption.IGNORE_CASE)
 
     /** 一个 Cookie 对（名字与值都由后端下发）。 */
@@ -64,6 +80,11 @@ object RecipeFetcher {
 
         val builder = Request.Builder().url(url)
         cookieHeaderOf(cookies)?.let { builder.header("Cookie", it) }
+        // 伪装成浏览器：学校网关/教务对 okhttp 默认 UA 不稳定（实测 2026-11-19）。
+        // 三个头逐字对齐后端实测脚本 tools/_verify/main.go:115-117。
+        builder.header("User-Agent", BROWSER_UA)
+        builder.header("Accept", HTML_ACCEPT)
+        builder.header("Accept-Language", ACCEPT_LANGUAGE)
 
         val request = when (httpMethod.uppercase()) {
             "GET" -> builder.get().build()
@@ -111,6 +132,14 @@ object RecipeFetcher {
         OkHttpClient.Builder()
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            // ⚠️ 不跟随重定向 —— 照抄后端实测脚本 tools/_verify/main.go:125-127。
+            //
+            // 实机诊断（2026-11-20）：默认 followRedirects=true 时，客户端请求课表编码地址
+            // 收到 302 → 自动跟到 /wui/ 登录页 → 拿到 1856 字节「川农e认证」壳，
+            // 于是被误判成「不是课表页」。而验证脚本关掉重定向后，同一地址同一票
+            // 直接返回 200 / 32848 字节真课表。**这是能否拿到课表的关键差异。**
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
     }
 

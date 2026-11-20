@@ -25,8 +25,12 @@ class RecipeFetcherTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
+        // 与生产 defaultClient 保持一致：不跟随重定向（这是拿到真课表的关键）。
         RecipeFetcher.setClientForTest(
-            okhttp3.OkHttpClient.Builder().build(),
+            okhttp3.OkHttpClient.Builder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build(),
         )
     }
 
@@ -56,6 +60,43 @@ class RecipeFetcherTest {
         val req = server.takeRequest()
         assertEquals("GET", req.method)
         assertEquals("ASPSESSIONID=abc123", req.getHeader("Cookie"))
+    }
+
+    @Test
+    fun `带浏览器请求头_逐字照抄后端实测脚本`() {
+        // 后端 tools/_verify/main.go:115 用这组头拿到 32848 字节真课表。
+        // 特别是 Android Chrome UA（不是桌面 UA，也不是 okhttp 默认 UA）。
+        server.enqueue(MockResponse().setResponseCode(200).setBody("ok"))
+
+        RecipeFetcher.fetch(server.url("/x").toString(), "GET", emptyList())
+
+        val req = server.takeRequest()
+        assertTrue(
+            "UA 必须是 Android Chrome（照抄验证脚本）",
+            req.getHeader("User-Agent")?.contains("Linux; Android 13") == true,
+        )
+        assertTrue(
+            "Accept 必须是 html",
+            req.getHeader("Accept")?.contains("text/html") == true,
+        )
+        assertEquals("zh-CN,zh;q=0.9", req.getHeader("Accept-Language"))
+    }
+
+    @Test
+    fun `302 不跟随重定向_直接作为响应返回`() {
+        // 实机诊断：跟随 302 会落到登录壳；不跟随才能像验证脚本那样
+        // 自己判断 Location 或直接拿到 200 真课表。这里断言注入的 client 关掉了跟随。
+        server.enqueue(
+            MockResponse().setResponseCode(302)
+                .setHeader("Location", "/login")
+                .setBody("redirecting"),
+        )
+        val e = runCatching {
+            RecipeFetcher.fetch(server.url("/x").toString(), "GET", emptyList())
+        }.exceptionOrNull()
+
+        // 不跟随 → 302 是非 2xx → fetch 抛异常（而不是把登录页当正文返回）
+        assertTrue("302 应被视为失败，不应跟随到登录页", e is IllegalStateException)
     }
 
     @Test
