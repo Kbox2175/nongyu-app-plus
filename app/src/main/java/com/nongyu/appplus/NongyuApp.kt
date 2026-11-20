@@ -68,10 +68,11 @@ fun NongyuApp() {
         // WebVPN 弹窗「登录后生效」：登录中心 → 主界面这一跳投递一次自动调度。
         // 闸门（WebVpnGate）保证每进程只弹一次、且用户点过「不同意」后不再骚扰；
         // 冷启动直接落在主界面（from == to）不投递 —— 那时不是「登录后」。
-        // 与转场共用同一个 effect，避免两个 effect 抢 previousDestination 的时序。
-        if (from == LoginDestination.LOGIN_CENTER && to == LoginDestination.MAIN) {
-            WebVpnDialogScheduler.request(WebVpnTrigger.SIGNED_IN)
-        }
+        //
+        // ★ 必须在圆形揭示动画**播完之后**再投递：弹窗挂在根节点最顶层，
+        //   提前弹会盖住 reveal 动画，让用户觉得「中心圆放大动画没了」。
+        val shouldRequestWebVpn = from == LoginDestination.LOGIN_CENTER &&
+            to == LoginDestination.MAIN
 
         if (LoginReveal.shouldPlay(from, to)) {
             // 主动驱动：先归零再推进，保证动画一定启动
@@ -86,6 +87,11 @@ fun NongyuApp() {
             // 冷启动 / 会话失效 / 原地不动：直接落位，不播动画
             progress.snapTo(if (to == LoginDestination.MAIN) 1f else 0f)
             playing = false
+        }
+
+        // 动画结束后再弹 WebVPN 弹窗，避免遮挡圆形揭示动画
+        if (shouldRequestWebVpn) {
+            WebVpnDialogScheduler.request(WebVpnTrigger.SIGNED_IN)
         }
     }
 

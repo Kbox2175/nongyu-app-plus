@@ -97,6 +97,89 @@ object WebVpnAutofill {
      * @param captcha 图形验证码；为空串时不填该框。
      * @return 交给 `WebView.evaluateJavascript` 的脚本；返回 JSON `{ok,via,why}`。
      */
+    /**
+     * 从 WebView 页面读出当前已填的账号/密码/手机号（用于「记住」）。
+     *
+     * 纯 WebView 方案下用户在学校页面里输入，原生看不到；要记住必须在登录前把值读出来。
+     * 只回 JSON（账号/密码/手机号），不回验证码。
+     */
+    fun buildReadCredentialsScript(): String =
+        """
+        (function(){
+          function val(ph){
+            var list = document.querySelectorAll('input');
+            for (var i=0;i<list.length;i++){
+              if ((list[i].placeholder||'').trim() === ph) return list[i].value || '';
+            }
+            return '';
+          }
+          function valPwd(){
+            var list = document.querySelectorAll("input[type='password']");
+            for (var i=0;i<list.length;i++){ if (list[i].value) return list[i].value; }
+            return '';
+          }
+          // 用 | 分隔，原生 split 解析（字段值不含 |）
+          return val(${jsStringLiteral(PH_ACCOUNT)}) + '|' + valPwd() + '|' + val(${jsStringLiteral(PH_PHONE)});
+        })();
+        """.trimIndent()
+
+    /**
+     * 预填脚本（纯 WebView 方案用）：切到指定 tab、填入账号/密码或手机号，**不提交、不碰验证码**。
+     *
+     * 用户仍需在页面上自己看验证码图、填图形码并点登录 —— App 只帮他把已知的账密/手机号
+     * 预填好，减少输入。验证码图是页面自己的，所见即所填，不存在两套图不匹配的问题。
+     *
+     * @param byPhone true=短信登录（填手机号），false=密码登录（填学号+密码）
+     * @return JS 脚本，返回 JSON `{tab, filled}` 便于诊断。
+     */
+    fun buildPrefillScript(account: String, password: String, byPhone: Boolean): String {
+        val a = jsStringLiteral(account.trim())
+        val p = jsStringLiteral(password)
+        val accountPh = jsStringLiteral(if (byPhone) PH_PHONE else PH_ACCOUNT)
+        val tabLabel = jsStringLiteral(if (byPhone) "短信登录" else "密码登录")
+        return """
+            (function(){
+              function visible(el){
+                if (!el) return false;
+                var r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+              }
+              function setValue(el, val){
+                try {
+                  var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
+                  d.set.call(el, val);
+                } catch(e) { el.value = val; }
+                el.dispatchEvent(new Event('input', {bubbles:true}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+              }
+              function fillByPh(ph, val){
+                var list = document.querySelectorAll('input');
+                for (var i=0;i<list.length;i++){
+                  if (!visible(list[i])) continue;
+                  if ((list[i].placeholder||'').trim() === ph) { setValue(list[i], val); return true; }
+                }
+                return false;
+              }
+              // 切到目标 tab（DOM 异步渲染，返回后由原生延迟再填一次）
+              var tab = 'current';
+              var links = document.querySelectorAll('a');
+              for (var j=0;j<links.length;j++){
+                var t = (links[j].innerText||'').replace(/\s/g,'');
+                if (t === $tabLabel && visible(links[j])) { links[j].click(); tab = $tabLabel; break; }
+              }
+              var okAcc = fillByPh($accountPh, $a);
+              var okPwd = false;
+              if (!${byPhone}) {
+                var pwds = document.querySelectorAll("input[type='password']");
+                for (var k=0;k<pwds.length;k++){
+                  if (visible(pwds[k])) { setValue(pwds[k], $p); okPwd = true; break; }
+                }
+              }
+              return JSON.stringify({tab:tab, acc:okAcc, pwd:okPwd});
+            })();
+        """.trimIndent()
+    }
+
     fun buildSignInScript(account: String, password: String, captcha: String = ""): String {
         val a = jsStringLiteral(account.trim())
         val p = jsStringLiteral(password)
