@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.unit.Dp
 import kotlin.math.sin
@@ -56,7 +57,14 @@ fun TimetableToolbar(
     modifier: Modifier = Modifier,
     /** 设置齿轮当前旋转角度（度）。点开设置时由外部驱动旋转。 */
     gearRotation: Float = 0f,
-    /** 上报齿轮中心在**屏幕**上的像素坐标，供设置面板做「克隆跟随」动画用。 */
+    /**
+     * 设置齿轮是否已被设置面板的克隆体接管。
+     *
+     * `true` 时本工具条**不再绘制**齿轮图标，改由设置面板顶层的克隆体显示 ——
+     * 两者严格互斥，避免出现「两个齿轮」或「克隆体先出现、原图标后消失」。
+     */
+    gearTakenOver: Boolean = false,
+    /** 上报设置齿轮中心在**屏幕**上的像素坐标，供设置面板做「克隆跟随」动画用。 */
     onGearCenterChange: (Offset?) -> Unit = {},
 ) {
     val colors = NongyuTheme.colors
@@ -80,10 +88,27 @@ fun TimetableToolbar(
             uiScale,
             onSettings,
             // 只用这一个按钮上报位置：设置面板的克隆动画就是跟随它
-            onPositioned = { centerInWindow -> onGearCenterChange(centerInWindow) },
+            onPositioned = { onGearCenterChange(it) },
         ) {
-            Box(modifier = Modifier.rotate(gearRotation)) {
-                SettingsIcon(iconSize, colors.brand.colorBrand, uiScale)
+            Box(
+                modifier = Modifier
+                    // 由**图标**自己上报中心，保证与克隆体同尺寸、同坐标系
+                    .onGloballyPositioned { coords ->
+                        val r = coords.boundsInRoot()
+                        onGearCenterChange(Offset(r.left + r.width / 2f, r.top + r.height / 2f))
+                    }
+                    .size(iconSize),
+            ) {
+                // 接管前画原图标；接管后改由设置面板顶层的克隆体绘制。
+                //
+                // 2026-11-23：维护者反馈「克隆体先出现，后图标消失」—— 两者曾同时可见。
+                // 现在用**同一个** `gearTakenOver` 判定，二者严格互斥：
+                // 克隆体出现的那一帧，这里的原图标恰好消失，视觉上无缝衔接。
+                if (!gearTakenOver) {
+                    Box(modifier = Modifier.rotate(gearRotation)) {
+                        SettingsIcon(iconSize, colors.brand.colorBrand, uiScale)
+                    }
+                }
             }
         }
         ToolbarButton(buttonSize, corner, colors.surface.colorCard, uiScale, onUpdateSchedule) {
@@ -116,7 +141,18 @@ private fun ToolbarButton(
     bg: Color,
     uiScale: Float,
     onClick: () -> Unit,
-    /** 可选：上报本按钮中心在**屏幕（window）**上的像素坐标。 */
+    /**
+     * 可选：上报**图标**（不是整个按钮）中心在根容器坐标系里的像素坐标。
+     *
+     * ⚠️ 2026-11-23 修正：原来这里用 `boundsInWindow()` 取整个按钮（34dp）的中心，
+     * 而设置面板里的克隆体是按图标（16dp）尺寸居中的 —— 两者尺寸不同，
+     * 结果克隆体总落在原按钮的右下角，看起来像「多出来一个齿轮」。
+     *
+     * 现在改为：由调用方对**图标本身**单独挂 `onGloballyPositioned`，
+     * 并且用 `positionInRoot()`（根容器坐标）而不是 window 坐标 ——
+     * 因为设置面板是画在同一个 Compose 根里的 `BoxWithConstraints`，
+     * 两者必须用同一套坐标系，混用会再差一个系统栏偏移。
+     */
     onPositioned: ((Offset) -> Unit)? = null,
     icon: @Composable () -> Unit,
 ) {
@@ -125,17 +161,6 @@ private fun ToolbarButton(
             .size(size)
             .clip(RoundedCornerShape(corner))
             .background(bg)
-            .then(
-                if (onPositioned == null) {
-                    Modifier
-                } else {
-                    Modifier.onGloballyPositioned { coords ->
-                        // boundsInWindow 给的是相对窗口的像素矩形，取中心
-                        val r = coords.boundsInWindow()
-                        onPositioned(Offset(r.left + r.width / 2f, r.top + r.height / 2f))
-                    }
-                },
-            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
