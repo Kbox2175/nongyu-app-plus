@@ -279,13 +279,14 @@ fun MainShell() {
     // ---- 设置面板（全局设置包，当前只有「课程表」分区）----
     var settingsOpen by remember { mutableStateOf(false) }
     var gearCenterPx by remember { mutableStateOf<Offset?>(null) }
+    // 齿轮是否已被设置面板接管：由面板回报，工具条据此隐藏原图标（两者严格互斥）
+    var gearTakenOver by remember { mutableStateOf(false) }
     // 面板滑入进度 + 齿轮旋转：用一个 Animatable 驱动，保证两者严格同步
     val settingsProgress = remember { Animatable(0f) }
     // 课程表设置项的值（本期只做界面，先放内存，持久化留给后续票）
     var settingsDayMode by remember { mutableStateOf(false) }
     var settingsShowWeekends by remember { mutableStateOf(true) }
     var settingsQuietRefresh by remember { mutableStateOf(false) }
-
 
     // 打开/关闭统一走同一个动画：progress 0→1 滑入，1→0 滑出（反向动画由对称 tween 保证）
     LaunchedEffect(settingsOpen) {
@@ -555,6 +556,7 @@ fun MainShell() {
                     },
                     onSettings = { settingsOpen = true },
                     gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
+                    gearTakenOver = gearTakenOver,
                     onGearCenterChange = { gearCenterPx = it },
                     onUpdateSchedule = { updateTimetableOnce() },
                     onAddScheduleFromToolbar = { week, day ->
@@ -925,6 +927,7 @@ fun MainShell() {
                 gearCenterPx = gearCenterPx,
                 gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
                 progress = settingsProgress.value,
+                onGearTakenOverChange = { gearTakenOver = it },
                 onDismiss = { settingsOpen = false },
                 onEntryClick = { key ->
                     when (key) {

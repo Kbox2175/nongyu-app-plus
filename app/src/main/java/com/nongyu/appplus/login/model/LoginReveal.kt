@@ -57,11 +57,18 @@ object LoginReveal {
     const val START_RADIUS_RATIO = 0.15f
 
     /**
-     * 起始圆心纵向位置（相对屏幕**高度**）：0.87，取跨设备按钮圆心的中值。
+     * 起始圆心纵向位置（相对**内容区**高度）：0.87，取跨设备按钮圆心的中值。
      *
-     * 按钮底距 148dp、半径 44dp，但 `navigationBarsPadding()` 与 [uiScale]
-     * 会把实际位置推到 0.84（真机估算）~ 0.894（蓝叠实测）之间，取中值 0.87。
-     * 详见 [START_RADIUS_RATIO] 的跨设备说明。
+     * ## 2026-11-23 的坐标系变更（重要）
+     *
+     * 系统栏避让已上移到根节点 `NongyuApp`（`windowInsetsPadding(systemBars)`）。
+     * 也就是说本类描述的「屏幕」现在是**已扣掉状态栏与导航栏的内容区**，
+     * 而不再是物理屏幕。好处是：原来 `navigationBarsPadding()` 与 uiScale 的
+     * 相互作用会把按钮位置在 0.84~0.894 之间来回推，现在这部分漂移消失了，
+     * 0.87 这个中值反而更稳。
+     *
+     * 按钮底距 148dp、半径 44dp，在内容区里位置基本固定，
+     * 因此仍取 0.87。详见 [START_RADIUS_RATIO] 的跨设备说明。
      */
     const val START_CENTER_Y_RATIO = 0.87f
 

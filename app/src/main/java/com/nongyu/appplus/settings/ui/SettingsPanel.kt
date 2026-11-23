@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nongyu.appplus.R
 import com.nongyu.appplus.design.NongyuTheme
+import com.nongyu.appplus.settings.logic.GearHandoff
 import com.nongyu.appplus.settings.model.SettingsActionEntry
 import com.nongyu.appplus.settings.model.SettingsChoiceEntry
 import com.nongyu.appplus.settings.model.SettingsContent
@@ -85,6 +87,8 @@ fun SettingsPanel(
     gearRotation: Float,
     progress: Float,
     onDismiss: () -> Unit,
+    /** 齿轮是否已被克隆体接管（回报给工具条决定原图标显隐）。 */
+    onGearTakenOverChange: (Boolean) -> Unit = {},
     onEntryClick: (SettingsEntryKey) -> Unit,
     onChoiceSelected: (SettingsEntryKey, Int) -> Unit,
 ) {
@@ -138,17 +142,32 @@ fun SettingsPanel(
                     .padding(s(16.dp)),
             ) {
                 // 标题行：左端预留齿轮位（克隆体最终落这里），右上角关闭 X
+                //
+                // 2026-11-23：维护者反馈「设置按钮与设置页里的图标高度不同」。
+                // 图标本身两边都是 gearSize（16dp），差异来自**行内垂直居中**
+                // 与行高被 18sp 文字 / 22dp 的 X 撑开：
+                // 齿轮只有 16dp，在更高的行里居中后，中心会偏离克隆体终点的计算基准。
+                // 所以把行高**锁定**成 gearSize，并让 X 也在同一高度内居中，
+                // 行内每个元素都按同一个基准垂直居中，克隆体落点才能与之一致。
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = gearSize),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Spacer(modifier = Modifier.size(gearSize))
+                    // 齿轮格：固定 gearSize，作为克隆体的落点基准
+                    Box(
+                        modifier = Modifier.size(gearSize),
+                        contentAlignment = Alignment.Center,
+                    ) {}
                     Spacer(modifier = Modifier.width(s(10.dp)))
                     Text(
                         text = "设置",
                         color = colors.surface.colorText,
                         fontSize = (18f * uiScale).sp,
                         fontWeight = FontWeight.SemiBold,
+                        // 行高锁定成与 gearSize 同量级，避免字体行高把整行撑得更高
+                        style = TextStyle(lineHeight = gearSize.value.sp * uiScale),
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     CloseCross(
@@ -182,37 +201,54 @@ fun SettingsPanel(
             }
         }
 
-        // ---- 齿轮克隆体：顶层，从原位置插值飞到面板标题行 ----
+        // ---- 齿轮克隆体：面板盖住原齿轮之后才接管，并随面板移动到标题行 ----
+        //
+        // 2026-11-23 修四处问题（维护者反馈）：
+        //
+        // ① **出现两个齿轮**：克隆体不能在 progress=0 就画 —— 那时原齿轮还在。
+        //    改为「面板左边缘真正越过原齿轮时」才出现（见 handoffProgress）。
+        // ② **落在原按钮右下角**：上报的坐标已改为图标中心 + 根容器坐标（见 TimetableToolbar），
+        //    与这里克隆体的绘制基准（图标尺寸、根容器）完全一致。
+        // ③ **不转动**：克隆体与工具条齿轮共用同一个 gearRotation，两处都随 progress 转。
+        // ④ **不等面板到位就开始移动**：位移只在接管之后才开始（t 从 0 走到 1）。
         val startCenter = gearCenterPx
-        if (startCenter != null && progress > FOLLOW_FROM) {
-            val t = ((progress - FOLLOW_FROM) / (1f - FOLLOW_FROM)).coerceIn(0f, 1f)
-            val eased = FastOutSlowInEasing.transform(t)
-
-            // 终点：面板内标题行左端齿轮的中心（相对屏幕）。
-            // 面板贴右边，所以起点是面板当前的左边缘 leftPx，不是从 0 算。
+        if (startCenter != null) {
             val padPx = s(16.dp).value * density.density
             val gearPx = gearSize.value * density.density
+            // 终点：面板标题行左侧齿轮格的中心
             val endCenterX = leftPx + padPx + gearPx / 2f
             val endCenterY = padPx + gearPx / 2f
 
-            val cx = startCenter.x + (endCenterX - startCenter.x) * eased
-            val cy = startCenter.y + (endCenterY - startCenter.y) * eased
+            // 交接判定与本文件外的工具条**共用同一个纯函数**（GearHandoff），
+            // 因此「这里出现克隆体」与「原图标消失」严格同帧，不会重叠也不会空隙。
+            val takenOver = GearHandoff.isTakenOver(leftPx, startCenter.x)
+            // 组合期不能写外部状态，放到副作用里；状态没变化时 Compose 不会重复触发
+            androidx.compose.runtime.SideEffect {
+                onGearTakenOverChange(takenOver)
+            }
 
-            Box(
-                modifier = Modifier
-                    .offset(
-                        x = ((cx - gearPx / 2f) / density.density).dp,
-                        y = ((cy - gearPx / 2f) / density.density).dp,
+            if (takenOver) {
+                // 接管后从原位平滑移动到标题行；travel 在接管瞬间为 0，故不会跳变
+                val travel = GearHandoff.travelProgress(leftPx, startCenter.x, gearPx)
+                val cx = startCenter.x + (endCenterX - startCenter.x) * travel
+                val cy = startCenter.y + (endCenterY - startCenter.y) * travel
+
+                Box(
+                    modifier = Modifier
+                        .offset(
+                            x = ((cx - gearPx / 2f) / density.density).dp,
+                            y = ((cy - gearPx / 2f) / density.density).dp,
+                        )
+                        .size(gearSize)
+                        .rotate(gearRotation),
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_toolbar_settings),
+                        contentDescription = null,
+                        tint = colors.brand.colorBrand,
+                        modifier = Modifier.size(gearSize),
                     )
-                    .size(gearSize)
-                    .rotate(gearRotation),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_toolbar_settings),
-                    contentDescription = null,
-                    tint = colors.brand.colorBrand,
-                    modifier = Modifier.size(gearSize),
-                )
+                }
             }
         }
     }
@@ -223,9 +259,6 @@ private const val PANEL_FRACTION = 0.90f
 
 /** 遮板不透明度上限。 */
 private const val SCRIM_ALPHA = 0.35f
-
-/** 进度超过此值后面板已盖住齿轮原位，克隆体才出现（否则会看到两个齿轮）。 */
-private const val FOLLOW_FROM = 0.55f
 
 /** 打开/关闭动画时长（毫秒）。 */
 const val SETTINGS_ANIM_MILLIS = 340
