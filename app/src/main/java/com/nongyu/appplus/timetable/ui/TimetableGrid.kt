@@ -21,6 +21,8 @@ import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import com.nongyu.appplus.timetable.logic.RoomLineBreaker
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -861,16 +863,35 @@ private fun CourseCard(
                 maxLines = if (block.isSpanning) 3 else 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = block.room,
-                color = fgSecondary,
-                fontSize = (6.5f * uiScale).sp,
-                lineHeight = (8f * uiScale).sp,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            // 教室：宽度不够时不再直接截断成「10-B2…」，
+            // 改为「有横杠就在横杠处换行、没横杠就按卡片可容纳字数换行」（RoomLineBreaker）。
+            // maxChars 由卡片实测宽度推算：不同天的列宽、屏幕密度、uiScale 都不同，
+            // 写死字数会在某些屏上仍然溢出、某些屏上过早换行。
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                // 单行可容纳字数 ≈ 可用宽度 / 单个字宽。教室字号 6.5sp，
+                // 中文字宽约等于字号，数字/字母更窄，这里按字号估一个保守值。
+                val charWidthPx = with(density) { (6.5f * uiScale).sp.toPx() }
+                val maxChars = if (charWidthPx > 0f) {
+                    (constraints.maxWidth / charWidthPx).toInt().coerceAtLeast(1)
+                } else {
+                    Int.MAX_VALUE
+                }
+                val lines = RoomLineBreaker.breakLines(block.room, maxChars)
+
+                Text(
+                    text = lines.joinToString("\n"),
+                    color = fgSecondary,
+                    fontSize = (6.5f * uiScale).sp,
+                    lineHeight = (8f * uiScale).sp,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    // 单行时仍限 1 行，两行时放宽到 2 —— 不放宽到无限，
+                    // 否则极端窄卡会把课程名挤没
+                    maxLines = lines.size.coerceAtLeast(1),
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
