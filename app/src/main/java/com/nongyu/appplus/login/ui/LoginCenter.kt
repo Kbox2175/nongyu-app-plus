@@ -781,14 +781,14 @@ fun LoginCenterScreen(
             },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
                 .padding(bottom = 148f.scaledDp(uiScale)),
             size = 88f.scaledDp(uiScale),
         )
 
 
         // ---- 屏幕底部署名「IOT 工作室制作」----
-        // 用 navigationBarsPadding 避开系统导航栏，不会被遮挡
+        // 系统栏避让已由根节点 `NongyuApp` 的 windowInsetsPadding(systemBars) 统一处理，
+        // 这里不再单独加 navigationBarsPadding，否则会叠两次
         Text(
             text = "IOT 工作室制作",
             color = colors.surface.colorTextSecondary,
@@ -796,7 +796,6 @@ fun LoginCenterScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
                 .padding(bottom = 32f.scaledDp(uiScale))
                 .fillMaxWidth(),
         )
@@ -808,7 +807,6 @@ fun LoginCenterScreen(
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
                 .padding(bottom = 72f.scaledDp(uiScale)),
         ) {
             // 唯一的提示出口：字号与颜色要够醒目、允许换行（学校侧 msg 可能较长）

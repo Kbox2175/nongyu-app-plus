@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -120,6 +119,8 @@ fun TimetableScreen(
     reloadSignal: Int = 0,
     /** 设置齿轮旋转角度（度），由 Shell 驱动；点开设置时旋转。 */
     gearRotation: Float = 0f,
+    /** 设置齿轮是否已被设置面板的克隆体接管（true 时工具条不再画原图标）。 */
+    gearTakenOver: Boolean = false,
     /** 上报设置齿轮中心在**屏幕**上的像素坐标，供设置面板做克隆跟随动画。 */
     onGearCenterChange: (Offset?) -> Unit = {},
 ) {
@@ -132,7 +133,11 @@ fun TimetableScreen(
             .background(colors.surface.colorBackground),
     ) {
         val uiScale = uiScaleFor(maxWidth.value)
-        val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        // ⚠️ 2026-11-23：状态栏避让已上移到 `NongyuApp` 根节点统一处理
+        // （`windowInsetsPadding(WindowInsets.systemBars)`）。
+        // 此处再算一次会造成**双重避让**（顶部多出一条状态栏高度的空白），
+        // 所以这里恒为 0.dp，仅保留变量名让下方公式不必改动。
+        val statusBarPadding = 0.dp
         val breathPx = with(density) { (BOTTOM_BREATH * uiScale).toPx() }
         val gridHeight: Dp = if (navOccupiedPx != null && navOccupiedPx > 0f) {
             with(density) {
@@ -439,6 +444,7 @@ fun TimetableScreen(
                 onSettings = onSettings,
                 onUpdateSchedule = onUpdateSchedule,
                 gearRotation = gearRotation,
+                gearTakenOver = gearTakenOver,
                 onGearCenterChange = onGearCenterChange,
                 onToggleDayWeek = { dayMode = !dayMode },
                 onAddSchedule = {

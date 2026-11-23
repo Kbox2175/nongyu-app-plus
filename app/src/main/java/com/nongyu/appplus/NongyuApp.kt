@@ -4,6 +4,11 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.background
+import com.nongyu.appplus.design.NongyuTheme
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -100,53 +105,81 @@ fun NongyuApp() {
     val revealCenterYRatio = LoginReveal.centerYRatio(p)
     val loginGone = LoginReveal.isLoginLayerGone(p)
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // ---- 底层：主界面 ----
-        // 转场一开始就渲染，这样圆洞里透出的就是它（不是空白）
-        if (state.destination == LoginDestination.MAIN) {
-            MainShell()
-        }
+    // ---- 全局系统栏避让（唯一真源）----
+    //
+    // 维护者 2026-11-23：设置面板被顶部条遮挡。根因不是某个面板算错了，
+    // 而是**每个界面各自算 offset**：`enableEdgeToEdge()` 之后系统栏浮在内容之上，
+    // 谁忘了算就被盖住。`docs/specs/界面层.md` §8.5 D 也记过「手算公式已连续错两次」。
+    //
+    // 所以这里统一消费一次 `systemBars`（状态栏 + 导航栏），把内边距加在根节点上：
+    // 之后**所有子界面拿到的都是已扣掉系统栏的干净区域**，不需要再算 offset。
+    //
+    // 用 `systemBars` 而不是 `safeDrawing`：后者还含刘海/挖孔等 cutout，
+    // 而本项目的主界面（课表、星云球）历史上是画到状态栏下面的，
+    // 换成 safeDrawing 会让这些页面整体下移、观感突变。
+    //
+    // 为什么要套两层 Box：内层加了 padding 后，**系统栏那一条会露出窗口底色**
+    //（`Theme.Material.Light` 的白，与界面的浅绿白不同，会看到一条白边）。
+    // 所以外层先铺满应用背景色，再让内层往里收。
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(NongyuTheme.colors.surface.colorBackground),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars),
+        ) {
+            // ---- 底层：主界面 ----
+            // 转场一开始就渲染，这样圆洞里透出的就是它（不是空白）
+            if (state.destination == LoginDestination.MAIN) {
+                MainShell()
+            }
 
-        // ---- 上层：登录中心 + 挖洞 ----
-        // 转场期间保留；一旦缺口覆盖全屏就可以整层移除，省一次全屏绘制
-        if (state.destination == LoginDestination.LOGIN_CENTER || (playing && !loginGone)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    // 必须在独立图层里挖洞，否则 DstOut 会擦到下面的主界面
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        if (playing) {
-                            // DstOut：把已画内容中「这个圆内」的部分擦成透明
-                            drawCircle(
-                                color = androidx.compose.ui.graphics.Color.Black,
-                                radius = revealRadiusRatio * size.width,
-                                center = Offset(
-                                    x = LoginReveal.CENTER_X_RATIO * size.width,
-                                    y = revealCenterYRatio * size.height,
-                                ),
-                                blendMode = BlendMode.DstOut,
-                            )
-                        }
-                    },
-            ) {
-                LoginCenterScreen(
-                    // 前 30% 进度内把登录按钮淡完：圆洞虽然会吃掉它，但按钮自带
-                    // graphicsLayer 缩放，可能挡住 DstOut 穿透，加这层兜底保证它一定消失。
-                    arrowAlphaOverride = if (playing) {
-                        (1f - p / 0.3f).coerceIn(0f, 1f)
-                    } else {
-                        null
-                    },
-                )
+            // ---- 上层：登录中心 + 挖洞 ----
+            // 转场期间保留；一旦缺口覆盖全屏就可以整层移除，省一次全屏绘制
+            if (state.destination == LoginDestination.LOGIN_CENTER || (playing && !loginGone)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        // 必须在独立图层里挖洞，否则 DstOut 会擦到下面的主界面
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        .drawWithContent {
+                            drawContent()
+                            if (playing) {
+                                // DstOut：把已画内容中「这个圆内」的部分擦成透明
+                                drawCircle(
+                                    color = androidx.compose.ui.graphics.Color.Black,
+                                    radius = revealRadiusRatio * size.width,
+                                    center = Offset(
+                                        x = LoginReveal.CENTER_X_RATIO * size.width,
+                                        y = revealCenterYRatio * size.height,
+                                    ),
+                                    blendMode = BlendMode.DstOut,
+                                )
+                            }
+                        },
+                ) {
+                    LoginCenterScreen(
+                        // 前 30% 进度内把登录按钮淡完：圆洞虽然会吃掉它，但按钮自带
+                        // graphicsLayer 缩放，可能挡住 DstOut 穿透，加这层兜底保证它一定消失。
+                        arrowAlphaOverride = if (playing) {
+                            (1f - p / 0.3f).coerceIn(0f, 1f)
+                        } else {
+                            null
+                        },
+                    )
+                }
             }
         }
 
         // ---- WebVPN 登录弹窗（**根节点最顶层**）----
         //
-        // 必须是根 Box 的最后一个子节点：Compose 同层后声明者绘制在上，
-        // 这样它盖住 MainShell（含设置面板 / 星云球 / 时间条遮罩）与登录中心 / 圆形揭示层。
+        // 必须是最外层 Box 的最后一个子节点（在内层避让 Box 之外）：
+        // 一来它在最上层，能盖住 MainShell（含设置面板 / 星云球 / 时间条遮罩）
+        // 与登录中心 / 圆形揭示层；二来它自己处理弹窗内的键盘避让，
+        // 不该被外层的系统栏 padding 再收缩一次。
         // 观察全局调度器，登录成功后、后端票失效时、设置面板手动入口都可能把它调度起来。
         WebVpnDialogHost()
     }
