@@ -1,16 +1,11 @@
 package com.nongyu.appplus.map.ui
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -24,8 +19,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.tooling.preview.Preview
-import com.nongyu.appplus.map.logic.MapGeoUri
 import com.nongyu.appplus.map.model.AnnotationKind
 import com.nongyu.appplus.map.model.MapAnnotation
 import com.nongyu.appplus.map.model.MapPoint
@@ -166,23 +159,3 @@ suspend fun decodeMapImage(path: String): ImageBitmap? = withContext(Dispatchers
     }.getOrNull()
 }
 
-/**
- * 跳转外部地图软件（geo: URI，系统让用户选 App）。
- *
- * @param context Activity 或 Application context 均可；用 Application 时需加 FLAG_ACTIVITY_NEW_TASK
- */
-fun openInExternalMap(
-    context: Context,
-    latitude: Double,
-    longitude: Double,
-    label: String?,
-): Boolean {
-    val uri = Uri.parse(MapGeoUri.build(latitude, longitude, label))
-    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-        if (context !is android.app.Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    }
-    return runCatching {
-        context.startActivity(intent)
-        true
-    }.getOrDefault(false)
-}
