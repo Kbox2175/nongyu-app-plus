@@ -126,6 +126,18 @@ interface PostApi {
         @Path("replyId") replyId: Long,
     ): Response<StatusOkDto>
 
+    /**
+     * DELETE /posts/:id/replies/:replyId —— 删除**自己的**评论（2026-11-25 新增）。
+     *
+     * 后端校验作者本人，非作者回错误；成功回 `{"status":"ok"}`。
+     * 删帖时后端会级联软删其下所有评论。
+     */
+    @DELETE("posts/{id}/replies/{replyId}")
+    suspend fun deleteReply(
+        @Path("id") id: Long,
+        @Path("replyId") replyId: Long,
+    ): Response<StatusOkDto>
+
     // ---------- 评价专用查询（后端 2026-11-23 新增） ----------
 
     /**

@@ -5,6 +5,8 @@ import com.nongyu.appplus.net.model.AmapKeyRequest
 import com.nongyu.appplus.net.model.ClassroomBuildingEnvelopeDto
 import com.nongyu.appplus.net.model.ClassroomBuildingListDto
 import com.nongyu.appplus.net.model.ClassroomLookupDto
+import com.nongyu.appplus.net.model.ClassroomMapMetaEnvelopeDto
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -47,6 +49,31 @@ interface ClassroomApi {
     /** `GET /classrooms/buildings/:id` —— 单栋详情，**含 routes**。 */
     @GET("classrooms/buildings/{id}")
     suspend fun building(@Path("id") id: Long): Response<ClassroomBuildingEnvelopeDto>
+
+    // ---------- 地图底图（后端 2026-11-25 新增，需 Bearer） ----------
+
+    /**
+     * `GET /classrooms/maps/:campus/meta` —— 地图元数据。
+     *
+     * ⚠️ 先看 `data.uploaded`：false 时**不要**调 [mapImage]。
+     * `data.calibrated=false` 时不能做像素↔经纬度换算。
+     */
+    @GET("classrooms/maps/{campus}/meta")
+    suspend fun mapMeta(@Path("campus") campus: String): Response<ClassroomMapMetaEnvelopeDto>
+
+    /**
+     * `GET /classrooms/maps/:campus` —— 底图原始图片字节。
+     *
+     * 后端给 `Content-Type` 与 `ETag`（objectKey），并强缓存一天。
+     * 客户端可用 `?v=<objectKey>` 让换图后 URL 自然失效。
+     *
+     * @param version 可选的版本参数（通常是 meta 返回的 objectKey）
+     */
+    @GET("classrooms/maps/{campus}")
+    suspend fun mapImage(
+        @Path("campus") campus: String,
+        @Query("v") version: String? = null,
+    ): Response<ResponseBody>
 }
 
 /**
