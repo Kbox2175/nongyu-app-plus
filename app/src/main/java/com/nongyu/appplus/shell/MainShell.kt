@@ -375,33 +375,9 @@ fun MainShell() {
     //
     // 所以记下本根 Box 自身的整窗偏移，收到上报时减掉，
     // 让 periodTopPx 变成「相对本 Box」的坐标，与时间条同一基准。
-    var rootOffsetYPx by remember { mutableFloatStateOf(0f) }
-    var periodTopPx by remember { mutableFloatStateOf(0f) }
-    var periodHeightPx by remember { mutableFloatStateOf(0f) }
-    // 票 #60：时间条拖动状态（遮罩用）；时间条本身也搬到 Shell 层，
-    // 这样遮罩才能盖住底部导航栏和右上角工具条，同时时间条浮在遮罩之上。
-    var rulerDragging by remember { mutableStateOf(false) }
-    // 当前时间在时间轴上的比例（每分钟刷新够了）
-    var nowMinute by remember { mutableStateOf(java.time.LocalTime.now()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            nowMinute = java.time.LocalTime.now()
-            delay(30_000L)
-        }
-    }
-    var rulerFocus by remember { mutableStateOf<Float?>(null) }
-    var rulerFocusHeld by remember { mutableStateOf<Float?>(null) }
-    // 详见 docs/specs/界面层.md §8.5 B 时间文字清除 effect 的 key 只盯 rulerDragging
-    LaunchedEffect(rulerDragging) {
-        if (!rulerDragging && rulerFocusHeld != null) {
-            delay(1600)
-            rulerFocusHeld = null
-        }
-    }
-    // 拖动中实时跟随手指
-    LaunchedEffect(rulerFocus) {
-        if (rulerFocus != null) rulerFocusHeld = rulerFocus
-    }
+    // 时间条定位/拖动/计时都已搬进 RulerState（行为未改）。
+    val rulerState = rememberRulerState()
+
     // 占位按钮的轻提示（设置 / 更新课表）：不接任何真实逻辑，只显示一句话。
     LaunchedEffect(placeholderHint) {
         // 提示出现 2.2s 后自动消失；用独立 effect 盯 placeholderHint，
@@ -557,9 +533,9 @@ fun MainShell() {
                 .fillMaxSize()
                 // 量出本 Box 在整窗里的纵向偏移（= 全局 systemBars 避让吃掉的顶部高度）。
                 .onGloballyPositioned { coords ->
-                    rootOffsetYPx = coords.localToRoot(
-                        androidx.compose.ui.geometry.Offset.Zero,
-                    ).y
+                    rulerState.onRootOffset(
+                        coords.localToRoot(androidx.compose.ui.geometry.Offset.Zero).y,
+                    )
                 },
         ) {
             // 详见 docs/specs/界面层.md §8.1 B 卡片外退出层：全屏 + 声明在底栏之前
@@ -637,14 +613,13 @@ fun MainShell() {
                     onScheduleClick = { sc ->
                         scheduleDetailId = if (scheduleDetailId == sc.id) null else sc.id
                     },
-                    onRulerDragStateChange = { rulerDragging = it },
+                    onRulerDragStateChange = { rulerState.dragging = it },
                     onPeriodColumnBounds = { top, h ->
                         // TimetableGrid 给的是整窗坐标；减掉本 Box 偏移换成相对坐标，
                         // 否则时间条会整体多下移一个状态栏高度。
-                        periodTopPx = (top - rootOffsetYPx).coerceAtLeast(0f)
-                        periodHeightPx = h
+                        rulerState.onPeriodColumnBounds(top, h)
                     },
-                    onRulerFocusChange = { rulerFocus = it },
+                    onRulerFocusChange = { rulerState.focus = it },
                 )
             }
 
@@ -992,7 +967,7 @@ fun MainShell() {
         // ---- 票 #60：拖时间条时的遮罩 ----
         // 位置必须在**星云球之后**：维护者要求遮板也要遮住星云球。
         // 时间条仍然声明在它之后 → 时间条与时间文字浮在遮罩之上，不被压暗。
-        ModalScrim(visible = rulerDragging)
+        ModalScrim(visible = rulerState.dragging)
 
         // ---- 全局设置面板（**层级最高**：盖住星云球、时间条与一切页面元素）----
         //
@@ -1049,8 +1024,8 @@ fun MainShell() {
         // ---- 时间条（页面级 overlay）----
         if (selectedTab == 1) {
             // 详见 docs/specs/界面层.md §8.5 D 位置必须用 TimetableGrid 上报的实测值
-            val rulerTop = with(density) { periodTopPx.toDp() }
-            val rulerHeight = with(density) { periodHeightPx.toDp() }
+            val rulerTop = with(density) { rulerState.periodTopPx.toDp() }
+            val rulerHeight = with(density) { rulerState.periodHeightPx.toDp() }
             // 课表几何映射：滑动时间 / 松手节次 / 流水位置全部走它，
             // 于是与右侧课程行严格对齐（密度不均匀：45 分钟一节课 vs 150 分钟午休）。
             val geometry = remember(rulerHeight) {
@@ -1060,7 +1035,7 @@ fun MainShell() {
             TimetableRuler(
                 uiScale = uiScale,
                 boxWidthRatio = 1f,
-                waterFraction = geometry.fractionAtTime(nowMinute),
+                waterFraction = geometry.fractionAtTime(rulerState.nowMinute),
                 tiltDegrees = rememberWaterTilt(),
                 onRelease = { fraction ->
                     val period = geometry.periodAtFraction(fraction)
@@ -1071,7 +1046,7 @@ fun MainShell() {
                         com.nongyu.appplus.timetable.data.weekOfTerm(today),
                     )
                 },
-                onDragStateChange = { rulerDragging = it },
+                onDragStateChange = { rulerState.dragging = it },
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(top = rulerTop)
