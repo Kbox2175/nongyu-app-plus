@@ -341,26 +341,9 @@ fun MainShell() {
     // 更新课表：进行中标记（防连点）+ 重载触发键（成功后让课表页重读缓存）
     var updatingTimetable by remember { mutableStateOf(false) }
     var timetableReloadKey by remember { mutableIntStateOf(0) }
-    // ---- 设置面板（全局设置包，当前只有「课程表」分区）----
-    var settingsOpen by remember { mutableStateOf(false) }
-    var gearCenterPx by remember { mutableStateOf<Offset?>(null) }
-    // 齿轮是否已被设置面板接管：由面板回报，工具条据此隐藏原图标（两者严格互斥）
-    var gearTakenOver by remember { mutableStateOf(false) }
-    // 面板滑入进度 + 齿轮旋转：用一个 Animatable 驱动，保证两者严格同步
-    val settingsProgress = remember { Animatable(0f) }
-    // 课程表设置项的值（本期只做界面，先放内存，持久化留给后续票）
-    var settingsDayMode by remember { mutableStateOf(false) }
-    var settingsShowWeekends by remember { mutableStateOf(true) }
-    var settingsQuietRefresh by remember { mutableStateOf(false) }
+    // ---- 设置面板：已搬到 SettingsPanelState（行为未改）----
+    val settingsState = rememberSettingsPanelState()
 
-    // 打开/关闭统一走同一个动画：progress 0→1 滑入，1→0 滑出（反向动画由对称 tween 保证）
-    LaunchedEffect(settingsOpen) {
-        if (settingsOpen) {
-            settingsProgress.animateTo(1f, settingsTween())
-        } else {
-            settingsProgress.animateTo(0f, settingsTween())
-        }
-    }
     // 票 #60 需求 4.1：切到课表 Tab 时，课表图标从底部往上变绿（800ms）。
     // 切走直接归零，不做离场动画（需求 5）。
     val iconFill = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -517,7 +500,7 @@ fun MainShell() {
                     val repo = CourseRepository(context)
                     repo.refreshFromJiaowu()
                         .onSuccess { count ->
-                            if (!settingsQuietRefresh) {
+                            if (!settingsState.quietRefresh) {
                                 showTextToast(context, "课表已更新：$count 个时段", uiScale = uiScale)
                             }
                             timetableReloadKey++
@@ -640,10 +623,10 @@ fun MainShell() {
                     onBlankSlotAdd = { day, period, week ->
                         applyIntent(resolveBlankSlotClick(openCard, day, period, week))
                     },
-                    onSettings = { settingsOpen = true },
-                    gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
-                    gearTakenOver = gearTakenOver,
-                    onGearCenterChange = { gearCenterPx = it },
+                    onSettings = { settingsState.open = true },
+                    gearRotation = settingsState.progress.value * SETTINGS_GEAR_DEGREES,
+                    gearTakenOver = settingsState.takenOver,
+                    onGearCenterChange = { settingsState.gearCenterPx = it },
                     onUpdateSchedule = { updateTimetableOnce() },
                     onAddScheduleFromToolbar = { week, day ->
                         // 工具条入口：预填今天、第 1 节
@@ -1019,25 +1002,25 @@ fun MainShell() {
         // 打开：齿轮旋转 + 面板贴右边缘滑入，左侧留 10% 空白；
         // 面板滑到包含齿轮后，齿轮克隆体随面板飞到标题行；
         // 点遮板或右上角 X 都走反向动画退回。
-        if (settingsOpen || settingsProgress.value > 0f) {
+        if (settingsState.open || settingsState.progress.value > 0f) {
             SettingsPanel(
                 content = SettingsBuilders.buildContent(
-                    dayMode = settingsDayMode,
-                    showWeekends = settingsShowWeekends,
-                    quietRefresh = settingsQuietRefresh,
+                    dayMode = settingsState.dayMode,
+                    showWeekends = settingsState.showWeekends,
+                    quietRefresh = settingsState.quietRefresh,
                 ),
                 uiScale = uiScale,
                 gearSize = s(16.dp),
-                gearCenterPx = gearCenterPx,
-                gearRotation = settingsProgress.value * SETTINGS_GEAR_DEGREES,
-                progress = settingsProgress.value,
-                onGearTakenOverChange = { gearTakenOver = it },
-                onDismiss = { settingsOpen = false },
+                gearCenterPx = settingsState.gearCenterPx,
+                gearRotation = settingsState.progress.value * SETTINGS_GEAR_DEGREES,
+                progress = settingsState.progress.value,
+                onGearTakenOverChange = { settingsState.takenOver = it },
+                onDismiss = { settingsState.open = false },
                 onEntryClick = { key ->
                     when (key) {
                         TimetableSettings.Keys.UpdateSchedule -> {
                             // 复用工具条「更新课表」的同一套逻辑：先关面板再刷新
-                            settingsOpen = false
+                            settingsState.open = false
                             updateTimetableOnce()
                         }
 
@@ -1045,7 +1028,7 @@ fun MainShell() {
                             // 手动调度 WebVPN 登录弹窗：先收起设置面板（弹窗在根节点最顶层，
                             // 面板动画期间同时显示会打架），再投递 MANUAL 触发源。
                             // MANUAL 是显式操作，绕过「不同意」的抑制。
-                            settingsOpen = false
+                            settingsState.open = false
                             com.nongyu.appplus.webvpn.data.WebVpnDialogScheduler
                                 .request(
                                     com.nongyu.appplus.webvpn.model.WebVpnTrigger.MANUAL,
@@ -1057,7 +1040,7 @@ fun MainShell() {
                 },
                 onChoiceSelected = { key, index ->
                     if (key == TimetableSettings.Keys.DayWeekView) {
-                        settingsDayMode = index == 1
+                        settingsState.dayMode = index == 1
                     }
                 },
             )
