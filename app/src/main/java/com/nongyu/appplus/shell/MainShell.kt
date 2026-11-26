@@ -45,10 +45,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
@@ -69,12 +67,6 @@ import com.nongyu.appplus.design.NongyuAppPlusTheme
 import com.nongyu.appplus.design.NongyuTheme
 import com.nongyu.appplus.design.showTextToast
 import com.nongyu.appplus.timetable.model.CourseEntry
-import com.nongyu.appplus.timetable.logic.isPeriodEnded
-import com.nongyu.appplus.timetable.logic.NOTE_DEBOUNCE_MS
-import com.nongyu.appplus.timetable.logic.mergeAttendance
-import com.nongyu.appplus.timetable.logic.noteChanged
-import com.nongyu.appplus.timetable.logic.shouldPersistNote
-import com.nongyu.appplus.timetable.logic.toggledAttendance
 import com.nongyu.appplus.shell.bar.DetailCardContent
 import com.nongyu.appplus.shell.bar.AddScheduleCardContent
 import com.nongyu.appplus.shell.bar.ScheduleDetailCardContent
@@ -89,7 +81,6 @@ import com.nongyu.appplus.shell.dialogs.CourseLocationEditDialog
 import com.nongyu.appplus.shell.dialogs.CourseLocationNavDialog
 import com.nongyu.appplus.shell.dialogs.CourseWeekEditDialog
 import com.nongyu.appplus.shell.dialogs.currentLocationOf
-import com.nongyu.appplus.timetable.data.LocationScope
 import com.nongyu.appplus.shell.DetailSnap
 import com.nongyu.appplus.shell.ClickIntent
 import com.nongyu.appplus.shell.OpenCard
@@ -103,7 +94,6 @@ import com.nongyu.appplus.shell.OrbMode
 import com.nongyu.appplus.shell.deriveBarMode
 import com.nongyu.appplus.shell.dismissTargetOf
 import com.nongyu.appplus.timetable.logic.TimetableGeometry
-import com.nongyu.appplus.timetable.data.MockCourseCommentRepository
 import com.nongyu.appplus.timetable.data.CourseUserStore
 import com.nongyu.appplus.timetable.data.weekOfTerm
 import com.nongyu.appplus.timetable.ui.classDaysOf
@@ -170,155 +160,8 @@ fun MainShell() {
     val scheduleForm = rememberScheduleFormState()
 
     // ---- 详情卡的可修改数据 ----
-    val courseId = detailCourse?.id
-
-    // 地点显示值：优先「按天覆盖」（今天），否则「通用覆盖」，否则原始 room。
-    val todayIso = remember { java.time.LocalDate.now().toString() }
-    val locDayFlow = remember(courseId, todayIso) {
-        if (courseId != null) courseUserStore.locationForDay(courseId, todayIso) else null
-    }
-    val locGeneralFlow = remember(courseId) {
-        if (courseId != null) {
-            courseUserStore.locationOverride(
-                courseId,
-                com.nongyu.appplus.timetable.data.LocationScope.Once,
-            )
-        } else null
-    }
-    val locDay by (locDayFlow ?: kotlinx.coroutines.flow.flowOf(null))
-        .collectAsState(initial = null)
-    val locGeneral by (locGeneralFlow ?: kotlinx.coroutines.flow.flowOf(null))
-        .collectAsState(initial = null)
-
-    // 教师覆盖（行内输入）
-    val teacherFlow = remember(courseId) {
-        if (courseId != null) courseUserStore.teacherOverride(courseId) else null
-    }
-    val teacherOverride by (teacherFlow ?: kotlinx.coroutines.flow.flowOf(null))
-        .collectAsState(initial = null)
-
-    // 周次复杂态：例外天（不上）
-    var exceptionIsoDays by remember(courseId) { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(courseId) {
-        exceptionIsoDays = if (courseId != null) {
-            courseUserStore.exceptionDays(courseId).first()
-        } else emptySet()
-    }
-
-    // 已删除课程 id：贯穿切周链路过滤，防止切周后「复活」
-    val deletedIds by courseUserStore.deletedIds().collectAsState(initial = emptySet())
-
-    // 详见 docs/specs/界面层.md §8.5 A 备注不能用 collectAsState 直接喂 TextField
-    var noteText by remember(courseId) { mutableStateOf("") }
-    // true = 初始化读取已完成，之后的改动才允许落盘（避免把空串覆盖掉已存的值）。
-    var noteReady by remember(courseId) { mutableStateOf(false) }
-    // 已落盘的备注值，用于跳过无意义写入。
-    var notePersisted by remember(courseId) { mutableStateOf("") }
-    LaunchedEffect(courseId) {
-        if (courseId != null) {
-            val loaded = courseUserStore.noteOnce(courseId)
-            noteText = loaded
-            notePersisted = loaded
-            noteReady = true
-        } else {
-            noteText = ""
-            notePersisted = ""
-            noteReady = false
-        }
-    }
-    // 输入停止 250ms 后统一落盘：既不会每个字符都起一个写协程（竞态），
-    // 也不会因为 Flow 回读把输入框内容拉回去。
-    LaunchedEffect(noteText, courseId, noteReady) {
-        if (shouldPersistNote(noteReady, courseId) && noteChanged(notePersisted, noteText)) {
-            delay(NOTE_DEBOUNCE_MS)
-            courseUserStore.setNote(courseId!!, noteText)
-            notePersisted = noteText
-        }
-    }
-
-    // 考勤：**按「哪一次课」记录**（ISO 日期 → 是否已上），不再按节次。
-    //
-    // 2026-11-23 维护者指正：原来用 `period -> Boolean`，一门 1-16 周的课每周都上，
-    // 键却只有「课程 + 节次」，于一学期只能记一次考勤；而详情卡里显示的
-    // 「应到 2」其实是**单次课的节数**，不是学期课次（12/8 次）。
-    //
-    // 现在：存储按日期，展示按「学期课次统计」（AttendanceStats 逐周推导，含单双周）。
-    var attendanceByDate by remember(courseId) {
-        mutableStateOf<Map<String, Boolean>>(emptyMap())
-    }
-    // 首次打开时从持久层读出该课程的全部考勤
-    LaunchedEffect(courseId) {
-        attendanceByDate = if (courseId != null) {
-            courseUserStore.attendanceAll(courseId)
-        } else {
-            emptyMap()
-        }
-    }
-    // 学期统计：总课次 / 已上课次 / 剩余（可请假）次数
-    val attendanceStats: com.nongyu.appplus.timetable.logic.AttendanceStats.Stats? =
-        remember(courseId, attendanceByDate) {
-            val c = detailCourse
-            if (c == null) {
-                null
-            } else {
-                com.nongyu.appplus.timetable.logic.AttendanceStats.compute(
-                    course = c,
-                    termStart = com.nongyu.appplus.timetable.data.MOCK_TERM_START,
-                    today = java.time.LocalDate.now(),
-                )
-            }
-        }
-
-    // 评论：从后端按「老师 + 课程」查询评价（真实数据，不再是 mock）。
-    // UI 仍只认 List<String>，这里负责把 Review 映射成带评分前缀的文本，
-    // 删除时再按下标把 id 找回来。
-    var comments by remember(courseId) { mutableStateOf<List<com.nongyu.appplus.timetable.logic.ReviewLine>>(emptyList()) }
-    var hasMoreReviews by remember(courseId) { mutableStateOf(false) }
-    val reviewRepo = remember { com.nongyu.appplus.timetable.data.CourseReviewRepository(context) }
-    // 课程上下文：从当前详情卡拿老师与课程名
-    LaunchedEffect(detailCourse?.id) {
-        val c = detailCourse
-        if (c == null) {
-            comments = emptyList()
-            hasMoreReviews = false
-        } else {
-            reviewRepo.list(teacherName = c.teacher, courseName = c.name)
-                .onSuccess { reviews ->
-                    // 只显示前 3 条；第 4 条用于判断「还有更多」
-                    val split = com.nongyu.appplus.timetable.logic.ReviewListDisplay.split(
-                        reviews.map {
-                            com.nongyu.appplus.timetable.logic.ReviewLine(
-                                text = it.text,
-                                isMine = it.isMine,
-                            )
-                        },
-                    )
-                    comments = split.visible
-                    hasMoreReviews = split.hasMore
-                }
-                .onFailure {
-                    comments = emptyList()
-                    hasMoreReviews = false
-                }
-        }
-    }
-
-    // 增删评价后重新拉取列表：与上面的首次加载共用同一套映射逻辑。
-    suspend fun reloadReviews(course: com.nongyu.appplus.timetable.model.CourseEntry) {
-        reviewRepo.list(teacherName = course.teacher, courseName = course.name)
-            .onSuccess { reviews ->
-                val split = com.nongyu.appplus.timetable.logic.ReviewListDisplay.split(
-                    reviews.map {
-                        com.nongyu.appplus.timetable.logic.ReviewLine(
-                            text = it.text,
-                            isMine = it.isMine,
-                        )
-                    },
-                )
-                comments = split.visible
-                hasMoreReviews = split.hasMore
-            }
-    }
+    // 已搬到 CourseDetailState（行为未改）。壳里只读字段、调方法。
+    val detailState = rememberCourseDetailState(courseUserStore, coroutineScope, detailCourse)
 
     // 三个子窗体的开关
     var showLocationEdit by remember { mutableStateOf(false) }
@@ -531,7 +374,7 @@ fun MainShell() {
                 TimetableScreen(
                     navOccupiedPx = navOccupiedHeight,
                         reloadSignal = timetableReloadKey,
-                    deletedIds = deletedIds,
+                    deletedIds = detailState.deletedIds,
                     schedules = scheduleForm.addedSchedules,
                     onCourseClick = { course ->
                         applyIntent(resolveCourseClick(openCard, course))
@@ -769,49 +612,25 @@ fun MainShell() {
                             expandProgress = expandProgress,
                             isCollapsing = isCollapsing,
                             uiScale = uiScale,
-                            location = locDay ?: locGeneral ?: course.room,
-                            teacher = teacherOverride ?: course.teacher,
-                            attendance = attendanceByDate,
-                            attendanceStats = attendanceStats,
+                            location = detailState.locDay ?: detailState.locGeneral ?: course.room,
+                            teacher = detailState.teacherOverride ?: course.teacher,
+                            attendance = detailState.attendanceByDate,
+                            attendanceStats = detailState.attendanceStats,
                             termStart = com.nongyu.appplus.timetable.data.MOCK_TERM_START,
-                            note = noteText,
-                            comments = comments,
-                            hasMoreReviews = hasMoreReviews,
+                            note = detailState.noteText,
+                            comments = detailState.comments,
+                            hasMoreReviews = detailState.hasMoreReviews,
                             onCommentDetail = {
                                 showTextToast(context, "查看评价详情：即将开放", uiScale = uiScale)
                             },
                             onCommentMore = {
                                 showTextToast(context, "查看更多评价：即将开放", uiScale = uiScale)
                             },
-                            onTeacherChange = { v ->
-                                coroutineScope.launch {
-                                    courseUserStore.setTeacherOverride(course.id, v)
-                                }
-                            },
-                            onAttendanceToggle = { isoDate ->
-                                val next = !(attendanceByDate[isoDate] ?: false)
-                                attendanceByDate = attendanceByDate + (isoDate to next)
-                                coroutineScope.launch {
-                                    courseUserStore.setAttendance(course.id, isoDate, next)
-                                }
-                            },
-                            onNoteChange = { text -> noteText = text },
-                            onCommentAdd = { text ->
-                                val parsed = com.nongyu.appplus.timetable.logic.ReviewText.parse(text)
-                                coroutineScope.launch {
-                                    reviewRepo.add(
-                                        teacherName = course.teacher,
-                                        courseName = course.name,
-                                        rating = parsed.rating,
-                                        body = parsed.body,
-                                    ).onSuccess { reloadReviews(course) }
-                                }
-                            },
-                            onDelete = {
-                                coroutineScope.launch {
-                                    courseUserStore.setDeletedIds(deletedIds + course.id)
-                                }
-                            },
+                            onTeacherChange = { v -> detailState.onTeacherChange(v) },
+                            onAttendanceToggle = { isoDate -> detailState.onAttendanceToggle(isoDate) },
+                            onNoteChange = { text -> detailState.onNoteChange(text) },
+                            onCommentAdd = { text -> detailState.onCommentAdd(text) },
+                            onDelete = { detailState.onDelete() },
                             onCollapse = ::collapseDetail,
                             onDismiss = { detailCourse = null },
                             onWeekEdit = { showWeekEdit = true },
@@ -996,7 +815,7 @@ fun MainShell() {
             if (dlgCourse != null) classDaysOf(dlgCourse) else emptySet()
         }
         if (dlgCourse != null) {
-            val dlgLocation = currentLocationOf(locDay, locGeneral, dlgCourse)
+            val dlgLocation = currentLocationOf(detailState.locDay, detailState.locGeneral, dlgCourse)
             if (showLocationEdit) {
                 CourseLocationEditDialog(
                     course = dlgCourse,
@@ -1004,17 +823,7 @@ fun MainShell() {
                     uiScale = uiScale,
                     classDays = dlgClassDays,
                     onConfirm = { newLocation, days ->
-                        coroutineScope.launch {
-                            courseUserStore.setLocationForDays(dlgCourse.id, days, newLocation)
-                            // 未选天时退回通用覆盖，保证至少有值生效
-                            if (days.isEmpty()) {
-                                courseUserStore.setLocationOverride(
-                                    dlgCourse.id,
-                                    LocationScope.Once,
-                                    newLocation,
-                                )
-                            }
-                        }
+                        detailState.onLocationConfirm(newLocation, days)
                     },
                     onDismiss = { showLocationEdit = false },
                 )
@@ -1024,15 +833,10 @@ fun MainShell() {
                     course = dlgCourse,
                     uiScale = uiScale,
                     classDays = dlgClassDays,
-                    initialExceptions = exceptionIsoDays.mapNotNull {
+                    initialExceptions = detailState.exceptionIsoDays.mapNotNull {
                         runCatching { java.time.LocalDate.parse(it) }.getOrNull()
                     }.toSet(),
-                    onConfirm = { days ->
-                        exceptionIsoDays = days
-                        coroutineScope.launch {
-                            courseUserStore.setExceptionDays(dlgCourse.id, days)
-                        }
-                    },
+                    onConfirm = { days -> detailState.onWeekConfirm(days) },
                     onDismiss = { showWeekEdit = false },
                 )
             }
