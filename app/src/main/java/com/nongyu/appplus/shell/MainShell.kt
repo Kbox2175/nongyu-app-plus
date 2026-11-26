@@ -5,7 +5,6 @@ import com.nongyu.appplus.design.uiScaleFor
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -390,63 +389,23 @@ fun MainShell() {
     // 缺项 = 该项走几何绘制，逐图标回落。
     val iconImages = remember(resolution) { resolution.resourcePayload().iconImages }
 
-    // 详见 docs/specs/界面层.md §8.3 C 雷达波方向语义
-    var pulseKey by remember { mutableIntStateOf(0) }
-    var pulseExpand by remember { mutableStateOf(true) }
-    val pulse = remember { Animatable(0f) }
-
     val active = mode != OrbMode.Idle
 
     // 退出激活态：返回键优先，其次再次点按。
     BackHandler(enabled = active) { mode = OrbMode.Idle }
 
-    LaunchedEffect(pulseKey) {
-        if (pulseKey > 0) {
-            pulse.snapTo(0f)
-            pulse.animateTo(1f, animationSpec = tween(if (pulseExpand) 520 else 460))
-        }
-    }
-
-    // 详见 docs/specs/界面层.md §8.3 E dim 只在长按态出现，且只保留一层
-    val dimAlpha by animateFloatAsState(
-        targetValue = if (mode == OrbMode.Listening) 0.55f else 0f,
-        animationSpec = tween(300),
-        label = "dim",
+    // 三形态判定提前到 BoxWithConstraints 之前：内容区「空白点击」分层需要它，
+    // 星云球溶解/汇聚也依赖它。优先级规则住在 shell/ShellState.kt（deriveBarMode，有单测）。
+    val barMode = deriveBarMode(
+        addingSchedule = scheduleForm.adding,
+        scheduleDetailId = scheduleForm.detailId,
+        hasDetailCourse = detailCourse != null,
+        orbMode = mode,
     )
 
-    // 输入态：只把**底栏以外**压暗（让输入栏保持明亮、成为视觉焦点）。
-    val inputScrimAlpha by animateFloatAsState(
-        targetValue = if (mode == OrbMode.Input) 0.35f else 0f,
-        animationSpec = tween(300),
-        label = "inputScrim",
-    )
-
-    // 点按态：圆球缩没、输入框展开
-    val orbScale by animateFloatAsState(
-        targetValue = when (mode) {
-            OrbMode.Idle -> 1f
-            OrbMode.Listening -> 1.08f
-            OrbMode.Input -> 0.4f
-        },
-        animationSpec = tween(420),
-        label = "orbScale",
-    )
-    val orbAlpha by animateFloatAsState(
-        targetValue = if (mode == OrbMode.Input) 0f else 1f,
-        animationSpec = tween(300),
-        label = "orbAlpha",
-    )
-    val navAlpha by animateFloatAsState(
-        targetValue = if (mode == OrbMode.Input) 0f else 1f,
-        animationSpec = tween(280),
-        label = "navAlpha",
-    )
-    // 输入框展开：宽度交给父布局（与导航栏同宽），只用 scaleX 做展开动画。
-    val inputScale by animateFloatAsState(
-        targetValue = if (mode == OrbMode.Input) 1f else 0.18f,
-        animationSpec = tween(420),
-        label = "inputScale",
-    )
+    // 星云球动画团（雷达波 / 溶解 / 各淡入淡出）：收进 OrbShellState（行为未改）。
+    // inputScale 原为未被读取的死代码，随本次抽离一并删除（对渲染无可观察影响）。
+    val orbState = rememberOrbShellState(mode, barMode)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -506,15 +465,7 @@ fun MainShell() {
         // 详见 docs/specs/界面层.md §8.4 B 占位上报的是底栏自身高度，不是顶边坐标
         var navOccupiedHeight by remember { mutableStateOf<Float?>(null) }
 
-        // 三形态判定提前到这里：内容区的「空白点击」分层需要它。
-        // （原先定义在底栏段落里，那里太晚，内容区拿不到。）
-        // 优先级规则住在 shell/ShellState.kt（deriveBarMode），那里有单测钉顺序。
-        val barMode = deriveBarMode(
-            addingSchedule = scheduleForm.adding,
-            scheduleDetailId = scheduleForm.detailId,
-            hasDetailCourse = detailCourse != null,
-            orbMode = mode,
-        )
+        // barMode 已在 BoxWithConstraints 之前定义（内容区分层与星云球溶解都要它）。
 
         // 四个页面：目前只有「课表」有实体内容（地图 #11），其余仍为占位。
         Box(
@@ -631,11 +582,11 @@ fun MainShell() {
         }
 
         // 详见 docs/specs/界面层.md §8.1 A dim 必须画在底栏之前
-        if (inputScrimAlpha > 0f) {
+        if (orbState.inputScrimAlpha > 0f) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(inputScrimAlpha)
+                    .alpha(orbState.inputScrimAlpha)
                     .background(Color(0xFF0A140F)),
             )
         }
@@ -898,7 +849,7 @@ fun MainShell() {
                     NavRowContent(
                         selectedTab = selectedTab,
                         onTabSelected = { selectedTab = it },
-                        navAlpha = navAlpha,
+                        navAlpha = orbState.navAlpha,
                         iconFillProgress = iconFill.value,
                         itemColor = colors.navBar.colorItem,
                         indicatorColor = colors.navBar.colorIndicator,
@@ -936,17 +887,14 @@ fun MainShell() {
         // 层级顺序 dim -> 雷达波 -> 球体 由 OrbHost 内部保证，不能调换。
         OrbHost(
             orbSize = orbSize,
-            scale = orbScale * orbDissolveScale,
-            alpha = orbAlpha * orbDissolveAlpha,
-            dimAlpha = dimAlpha,
-            pulse = pulse.value,
-            pulseExpand = pulseExpand,
+            scale = orbState.orbScale * orbState.orbDissolveScale,
+            alpha = orbState.orbAlpha * orbState.orbDissolveAlpha,
+            dimAlpha = orbState.dimAlpha,
+            pulse = orbState.pulseValue,
+            pulseExpand = orbState.pulseExpand,
             mode = mode,
             onModeChange = { mode = it },
-            onPulse = { expand ->
-                pulseExpand = expand
-                pulseKey++
-            },
+            onPulse = { expand -> orbState.onPulse(expand) },
             enabled = barMode == BarMode.Normal,
         )
 
