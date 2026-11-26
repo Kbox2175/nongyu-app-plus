@@ -167,16 +167,8 @@ fun MainShell() {
         if (detailCourse != null && !isCollapsing) isCollapsing = true
     }
 
-    // 点空白格添加的日程（#18 第 6 项）：状态放 Shell，TimetableScreen 只负责渲染。
-    // 本期内存态、不持久化（与 MOCK_COURSES 口径一致）。
-    val addedSchedules = remember {
-        androidx.compose.runtime.mutableStateListOf<com.nongyu.appplus.timetable.model.ScheduleEntry>()
-    }
-
-    // 添加日程表单的横杠下拉累计位移（dp，正=向下）
-    var scheduleDragDp by remember { mutableFloatStateOf(0f) }
-    // 日程卡「展开态」：点日程卡拉杆打开，再点卡外任意位置退出（开/关两态）
-    var scheduleDetailId by remember { mutableStateOf<String?>(null) }
+    // 日程表单 + 明细卡：已搬到 ScheduleFormState（行为未改）。
+    val scheduleForm = rememberScheduleFormState()
 
     // ---- 详情卡的可修改数据 ----
     val courseId = detailCourse?.id
@@ -333,9 +325,6 @@ fun MainShell() {
     var showLocationEdit by remember { mutableStateOf(false) }
     var showLocationNav by remember { mutableStateOf(false) }
     var showWeekEdit by remember { mutableStateOf(false) }
-    // 添加日程表单（#14）：非 null 即导航栏原地变形为表单卡。
-    // (day, startPeriod, week) —— 工具条入口用「今天 + 第 1 节」，空白格入口用被点的那格。
-    var addingSchedule by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
     // 占位按钮的轻提示（不接任何真实逻辑）
     var placeholderHint by remember { mutableStateOf<String?>(null) }
     // 更新课表：进行中标记（防连点）+ 重载触发键（成功后让课表页重读缓存）
@@ -521,8 +510,8 @@ fun MainShell() {
         // （原先定义在底栏段落里，那里太晚，内容区拿不到。）
         // 优先级规则住在 shell/ShellState.kt（deriveBarMode），那里有单测钉顺序。
         val barMode = deriveBarMode(
-            addingSchedule = addingSchedule,
-            scheduleDetailId = scheduleDetailId,
+            addingSchedule = scheduleForm.adding,
+            scheduleDetailId = scheduleForm.detailId,
             hasDetailCourse = detailCourse != null,
             orbMode = mode,
         )
@@ -541,8 +530,8 @@ fun MainShell() {
             // 详见 docs/specs/界面层.md §8.1 B 卡片外退出层：全屏 + 声明在底栏之前
             val dismissAction: (() -> Unit)? = when (dismissTargetOf(barMode)) {
                 DismissTarget.Detail -> ({ collapseDetail() })
-                DismissTarget.ScheduleDetail -> ({ scheduleDetailId = null })
-                DismissTarget.AddSchedule -> ({ addingSchedule = null })
+                DismissTarget.ScheduleDetail -> ({ scheduleForm.closeDetail() })
+                DismissTarget.AddSchedule -> ({ scheduleForm.cancelAdd() })
                 DismissTarget.None -> null
             }
             if (dismissAction != null) {
@@ -561,15 +550,15 @@ fun MainShell() {
                 // - 点课程盒子：课程卡开着 → 直接切卡（不要求点两下）
                 // - 点空白格：课程卡开着 → 直接清空（立即，不走收拢动画）
                 val openCard = currentOpenCard(
-                    addingSchedule = addingSchedule,
-                    scheduleDetailId = scheduleDetailId,
+                    addingSchedule = scheduleForm.adding,
+                    scheduleDetailId = scheduleForm.detailId,
                     hasDetailCourse = detailCourse != null,
                 )
                 fun applyIntent(intent: ClickIntent) {
                     when (intent) {
                         ClickIntent.Dismiss -> when (openCard) {
-                            OpenCard.AddSchedule -> addingSchedule = null
-                            OpenCard.ScheduleDetail -> scheduleDetailId = null
+                            OpenCard.AddSchedule -> scheduleForm.cancelAdd()
+                            OpenCard.ScheduleDetail -> scheduleForm.closeDetail()
                             // 点课程盒子时退出走收拢动画（高度动画跑完再切内容）
                             OpenCard.DetailCourse -> collapseDetail()
                             OpenCard.None -> Unit
@@ -583,7 +572,7 @@ fun MainShell() {
                             isCollapsing = false
                         }
                         is ClickIntent.OpenAddSchedule -> {
-                            addingSchedule = Triple(intent.day, intent.period, intent.week)
+                            scheduleForm.openAt(intent.day, intent.period, intent.week)
                         }
                     }
                 }
@@ -592,7 +581,7 @@ fun MainShell() {
                     navOccupiedPx = navOccupiedHeight,
                         reloadSignal = timetableReloadKey,
                     deletedIds = deletedIds,
-                    schedules = addedSchedules,
+                    schedules = scheduleForm.addedSchedules,
                     onCourseClick = { course ->
                         applyIntent(resolveCourseClick(openCard, course))
                     },
@@ -606,12 +595,12 @@ fun MainShell() {
                     onUpdateSchedule = { updateTimetableOnce() },
                     onAddScheduleFromToolbar = { week, day ->
                         // 工具条入口：预填今天、第 1 节
-                        addingSchedule = Triple(day, 1, week)
+                        scheduleForm.openFromToolbar(week, day)
                     },
                     // 日程卡只有开/关两态（维护者：「只有开关两态，拉下去就是关了这个卡片」）：
                     // 点卡或下拉横杠都是 toggle。
                     onScheduleClick = { sc ->
-                        scheduleDetailId = if (scheduleDetailId == sc.id) null else sc.id
+                        scheduleForm.toggleDetail(sc.id)
                     },
                     onRulerDragStateChange = { rulerState.dragging = it },
                     onPeriodColumnBounds = { top, h ->
@@ -778,7 +767,7 @@ fun MainShell() {
             ) { showing ->
                 when (showing) {
                 BarMode.AddSchedule -> {
-                    val slot = addingSchedule
+                    val slot = scheduleForm.adding
                     if (slot != null) {
                         // 表单布线已搬到 shell/bar/ScheduleCards.kt（行为未改）。
                         AddScheduleCardContent(
@@ -790,34 +779,31 @@ fun MainShell() {
                             // 之前写在同一个回调里时，AnimatedContent 的 targetState
                             // 没有及时重算，导致表单保存后不关闭（实测）。
                             onSave = { entry ->
-                                addingSchedule = null
-                                addedSchedules.add(entry)
+                                scheduleForm.save(entry)
                             },
-                            onCancel = { addingSchedule = null },
+                            onCancel = { scheduleForm.cancelAdd() },
                             // 横杠下拉：跟手记录位移。
-                            onDrag = { deltaDp -> scheduleDragDp += deltaDp },
+                            onDrag = { deltaDp -> scheduleForm.onAddDrag(deltaDp) },
                             // 松手时超过阈值（72 * uiScale）就关闭表单。
                             onDragEnd = { threshold ->
-                                if (scheduleDragDp > threshold) addingSchedule = null
-                                scheduleDragDp = 0f
+                                scheduleForm.onAddDragEnd(threshold)
                             },
                         )
                     }
                 }
                 BarMode.ScheduleDetail -> {
-                    val sc = addedSchedules.firstOrNull { it.id == scheduleDetailId }
+                    val sc = scheduleForm.addedSchedules.firstOrNull { it.id == scheduleForm.detailId }
                     if (sc != null) {
                         // 明细卡布线已搬到 shell/bar/ScheduleCards.kt（行为未改）。
                         ScheduleDetailCardContent(
                             entry = sc,
                             uiScale = uiScale,
                             // 行内编辑即时落库：直接替换列表里同 id 的那条。
-                            // scheduleDetailId 不变，卡片保持打开状态不闪。
+                            // detailId 不变，卡片保持打开状态不闪。
                             onUpdate = { updated ->
-                                val idx = addedSchedules.indexOfFirst { it.id == updated.id }
-                                if (idx >= 0) addedSchedules[idx] = updated
+                                scheduleForm.updateEntry(updated)
                             },
-                            onClose = { scheduleDetailId = null },
+                            onClose = { scheduleForm.closeDetail() },
                         )
                     }
                 }
@@ -1040,7 +1026,7 @@ fun MainShell() {
                 onRelease = { fraction ->
                     val period = geometry.periodAtFraction(fraction)
                     val today = java.time.LocalDate.now()
-                    addingSchedule = Triple(
+                    scheduleForm.openAt(
                         today.dayOfWeek.value - 1,
                         period,
                         com.nongyu.appplus.timetable.data.weekOfTerm(today),
